@@ -108,69 +108,93 @@ async *submitMessage(
 
 ## 3.3 queryLoop：核心循环机制
 
-[src/query.ts:241](../../src/query.ts#L241) 中的 `queryLoop()` 是整个系统最核心的函数。它是一个 `while(true)` 循环，每次迭代代表一次 AI 调用：
+[src/query.ts:241](../../src/query.ts#L241) 中的 `queryLoop()` 是整个系统最核心的函数。它是一个 `while(true)` 循环，每次迭代代表一次 AI 调用。
+
+### 跨迭代状态（State 对象）
+
+循环通过一个不可变的 `State` 对象在迭代间传递状态，每次 `continue` 都创建新的 State 快照：
 
 ```typescript
-async function* queryLoop(params: QueryParams, consumedCommandUuids: string[]) {
-  // 初始化跨迭代状态
-  let state: State = {
-    messages: params.messages,
-    toolUseContext: params.toolUseContext,
-    maxOutputTokensRecoveryCount: 0,
-    hasAttemptedReactiveCompact: false,
-    turnCount: 1,
-    transition: undefined,  // 上次迭代继续的原因
-    // ...
-  };
-  
-  const budgetTracker = createBudgetTracker();
-  
-  while (true) {
-    // 解构当前状态
-    const { messages, toolUseContext, ... } = state;
-    
-    // 1. 预处理：应用工具结果预算、历史压缩
-    messagesForQuery = await applyToolResultBudget(messagesForQuery, ...);
-    
-    // 2. 调用 Claude API（流式）
-    yield { type: 'stream_request_start' };
-    const response = yield* callModel(messagesForQuery, systemPrompt, ...);
-    
-    // 3. 处理工具调用
-    const toolResults = yield* executeTools(response.toolCalls, ...);
-    
-    // 4. 决定是否继续循环
-    const decision = checkContinuation(response, toolResults, budgetTracker);
-    
-    if (decision.type === 'terminal') {
-      return decision;  // 退出循环
-    }
-    
-    // 5. 更新状态，继续下一轮
-    state = { ...state, messages: [...messages, ...newMessages], transition: decision };
-  }
+type State = {
+  messages: Message[]                          // 当前消息历史
+  toolUseContext: ToolUseContext               // 工具执行上下文
+  autoCompactTracking: AutoCompactTrackingState | undefined
+  maxOutputTokensRecoveryCount: number         // 输出截断恢复次数（上限 3）
+  hasAttemptedReactiveCompact: boolean         // 是否已尝试响应式压缩
+  maxOutputTokensOverride: number | undefined  // 升级后的 max_tokens（64k）
+  pendingToolUseSummary: Promise<...> | undefined
+  stopHookActive: boolean | undefined
+  turnCount: number
+  transition: Continue | undefined             // 上次迭代继续的原因
 }
 ```
 
-### 循环状态机
+### 每次迭代的执行顺序
 
-循环的每次迭代都有明确的"继续原因"（`transition`），这使得调试和测试变得清晰：
+```
+while (true) {
+  1. 解构 state（只读快照）
+  2. 启动技能发现预取（skillPrefetch，与 API 调用并行）
+  3. yield { type: 'stream_request_start' }
+  4. 应用工具结果预算（applyToolResultBudget）
+  5. 应用 snip 压缩（feature('HISTORY_SNIP')）
+  6. 应用 microcompact（缓存感知的轻量压缩）
+  7. 应用 context collapse（上下文折叠）
+  8. 检查 autocompact 阈值（可能触发完整压缩）
+  9. 调用 Claude API（流式，queryModelWithStreaming）
+ 10. 处理流式响应（工具调用实时发现 → StreamingToolExecutor）
+ 11. 等待所有工具执行完成（runTools）
+ 12. 错误恢复判断（prompt_too_long / max_output_tokens / model_fallback）
+ 13. 执行 stop hooks
+ 14. 决定继续或退出
+}
+```
+
+### 循环状态机（transition 类型）
+
+每次 `continue` 都携带明确的原因，便于调试和遥测：
 
 ```typescript
-type Continue = 
-  | { type: 'tool_use' }                    // AI 调用了工具
-  | { type: 'token_budget_continuation' }   // Token 预算未用完，继续
-  | { type: 'max_output_tokens_recovery' }  // 输出被截断，恢复
-  | { type: 'prompt_too_long_compact' }     // 上下文太长，压缩后重试
-  | { type: 'fallback_model' }              // 切换到备用模型
-  | { type: 'stop_hook_continuation' }      // Stop Hook 要求继续
+// src/query/transitions.ts
+type Continue =
+  | { reason: 'tool_use' }
+  | { reason: 'token_budget_continuation' }
+  | { reason: 'max_output_tokens_recovery'; attempt: number }
+  | { reason: 'max_output_tokens_escalate' }      // 升级到 64k max_tokens
+  | { reason: 'collapse_drain_retry'; committed: number }
+  | { reason: 'reactive_compact_retry' }
+  | { reason: 'stop_hook_continuation' }
+  | { reason: 'stop_hook_blocking_error' }
 
-type Terminal = 
-  | { type: 'end_turn' }                    // 正常结束
-  | { type: 'max_turns' }                   // 达到最大轮次
-  | { type: 'max_budget' }                  // 超出费用预算
-  | { type: 'error' }                       // 不可恢复错误
+type Terminal =
+  | { reason: 'completed' }
+  | { reason: 'aborted_streaming' }
+  | { reason: 'prompt_too_long' }
+  | { reason: 'image_error' }
+  | { reason: 'model_error'; error: unknown }
+  | { reason: 'stop_hook_prevented' }
 ```
+
+### 关键实现细节：工具结果预算
+
+在每次 API 调用前，系统会检查历史消息中工具结果的总大小：
+
+```typescript
+// 对超过 maxResultSizeChars 的工具结果进行内容替换
+// 无预算限制的工具（如 FileReadTool）被排除在外
+messagesForQuery = await applyToolResultBudget(
+  messagesForQuery,
+  toolUseContext.contentReplacementState,
+  persistReplacements ? records => void recordContentReplacement(...) : undefined,
+  new Set(
+    toolUseContext.options.tools
+      .filter(t => !Number.isFinite(t.maxResultSizeChars))
+      .map(t => t.name),
+  ),
+)
+```
+
+被替换的内容会写入磁盘，AI 可以通过 FileReadTool 读取完整内容。
 
 ---
 
@@ -178,7 +202,7 @@ type Terminal =
 
 ### StreamingToolExecutor
 
-[src/services/tools/StreamingToolExecutor.ts](../../src/services/tools/StreamingToolExecutor.ts) 实现了流式工具执行的核心逻辑：
+[src/services/tools/StreamingToolExecutor.ts](../../src/services/tools/StreamingToolExecutor.ts) 实现了流式工具执行的核心逻辑。
 
 **关键设计**：工具调用在 AI 流式输出过程中**实时发现、实时开始执行**，不等待 AI 完成整个响应。
 
@@ -194,9 +218,30 @@ AI 流式输出:
   GrepTool 开始执行（如果是只读工具）──► 完成
 ```
 
+### StreamingToolExecutor 的关键方法
+
+```typescript
+class StreamingToolExecutor {
+  // 当 AI 流中发现新的 tool_use block 时调用
+  addTool(toolBlock: ToolUseBlock, parentMessage: AssistantMessage): void
+  
+  // 同步获取已完成的工具结果（在流式循环中轮询）
+  getCompletedResults(): ToolExecutionResult[]
+  
+  // 异步等待所有剩余工具完成（流结束后调用）
+  async *getRemainingResults(): AsyncGenerator<ToolExecutionResult>
+  
+  // 丢弃所有待执行/执行中的工具（模型降级时使用）
+  discard(): void
+}
+```
+
+**Bash 工具错误传播**：当 Bash 工具执行失败时，会通过 `siblingAbortController` 取消同批次的其他工具，防止在错误状态下继续执行。
+
 ### 并发规则
 
 ```typescript
+// 并发决策逻辑（简化）
 canExecuteTool(isConcurrencySafe: boolean): boolean {
   const running = tools.filter(t => t.status === 'executing');
   
@@ -216,6 +261,35 @@ canExecuteTool(isConcurrencySafe: boolean): boolean {
 **非并发安全工具**（写入，必须串行）：
 - `FileWriteTool`、`FileEditTool`
 - `BashTool`、`PowerShellTool`
+
+### 工具执行与流式输出的交织
+
+在 `queryLoop` 中，工具结果的收集与 AI 流式输出交织进行：
+
+```typescript
+// 在流式循环内：每次收到 assistant message 就检查是否有工具调用
+if (message.type === 'assistant') {
+  const toolUseBlocks = message.message.content.filter(
+    content => content.type === 'tool_use',
+  ) as ToolUseBlock[]
+  
+  if (streamingToolExecutor) {
+    for (const toolBlock of toolUseBlocks) {
+      streamingToolExecutor.addTool(toolBlock, message)  // 立即开始执行
+    }
+  }
+}
+
+// 同时轮询已完成的工具结果（不等待流结束）
+if (streamingToolExecutor) {
+  for (const result of streamingToolExecutor.getCompletedResults()) {
+    if (result.message) {
+      yield result.message  // 立即 yield 给调用方
+      toolResults.push(...)
+    }
+  }
+}
+```
 
 ---
 
@@ -281,57 +355,148 @@ export function checkTokenBudget(
 
 ## 3.6 错误恢复机制
 
-`queryLoop` 实现了多层错误恢复，而不是遇到错误就崩溃：
+`queryLoop` 实现了多层错误恢复，而不是遇到错误就崩溃。所有错误恢复都通过创建新的 `State` 对象并 `continue` 来实现，保持循环的不变性。
 
-### 1. 上下文过长（413 错误）
+### 1. 输出截断（max_output_tokens）—— 两阶段恢复
+
+```typescript
+// 阶段一：升级 max_tokens（仅触发一次）
+// 如果使用了默认的 8k 上限并触发截断，先尝试升级到 64k
+if (capEnabled && maxOutputTokensOverride === undefined) {
+  state = { ...state, maxOutputTokensOverride: ESCALATED_MAX_TOKENS,
+            transition: { reason: 'max_output_tokens_escalate' } }
+  continue
+}
+
+// 阶段二：多轮恢复（最多 3 次）
+// MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3
+if (maxOutputTokensRecoveryCount < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT) {
+  const recoveryMessage = createUserMessage({
+    content: `Output token limit hit. Resume directly — no apology, no recap of what you were doing. ` +
+             `Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.`,
+    isMeta: true,
+  })
+  state = {
+    messages: [...messagesForQuery, ...assistantMessages, recoveryMessage],
+    maxOutputTokensRecoveryCount: maxOutputTokensRecoveryCount + 1,
+    transition: { reason: 'max_output_tokens_recovery', attempt: maxOutputTokensRecoveryCount + 1 },
+    // ...
+  }
+  continue
+}
+// 恢复次数耗尽 → 将截断错误 yield 给用户
+yield lastMessage
+```
+
+### 2. 上下文过长（prompt_too_long / 413 错误）—— 三阶段恢复
 
 ```
-错误：消息历史太长，超过模型上下文窗口
-    │
-    ▼
-触发自动压缩（autoCompact）
-    │
-    ▼
-将历史消息压缩为摘要
-    │
-    ▼
-用压缩后的消息重试
+阶段一：Context Collapse 排空（feature('CONTEXT_COLLAPSE')）
+  → 将已折叠的上下文提交，释放 token 空间
+  → transition: { reason: 'collapse_drain_retry', committed: N }
+
+阶段二：Reactive Compact（响应式压缩）
+  → 调用 Claude API 生成历史摘要
+  → 用摘要替换历史消息
+  → transition: { reason: 'reactive_compact_retry' }
+  → hasAttemptedReactiveCompact = true（防止无限循环）
+
+阶段三：放弃恢复
+  → yield 错误消息给用户
+  → 执行 stop failure hooks
+  → return { reason: 'prompt_too_long' }
 ```
 
-### 2. 输出截断（max_output_tokens）
+**关键保护**：`hasAttemptedReactiveCompact` 标志防止压缩后仍然 413 时的无限循环。
 
-```
-错误：AI 输出被截断（达到 max_output_tokens 限制）
-    │
-    ▼
-最多重试 3 次（MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3）
-    │
-    ▼
-发送"请继续"消息，让 AI 接着输出
-```
+### 3. 模型降级（FallbackTriggeredError）
 
-### 3. 模型降级
-
-```
-错误：主模型不可用或超出配额
-    │
-    ▼
-切换到 fallbackModel（备用模型）
-    │
-    ▼
-用备用模型重试
+```typescript
+if (innerError instanceof FallbackTriggeredError) {
+  const fallbackModel = innerError.fallbackModel
+  
+  // 清空当前迭代的所有结果（防止孤立的 tool_result）
+  assistantMessages.length = 0
+  toolResults.length = 0
+  toolUseBlocks.length = 0
+  needsFollowUp = false
+  
+  // 重建 StreamingToolExecutor（丢弃旧的待执行工具）
+  streamingToolExecutor?.discard()
+  streamingToolExecutor = new StreamingToolExecutor(...)
+  
+  // 切换模型
+  toolUseContext.options.mainLoopModel = fallbackModel
+  
+  // 清理 thinking 签名块（模型绑定，不能跨模型复用）
+  if (process.env.USER_TYPE === 'ant') {
+    messagesForQuery = stripSignatureBlocks(messagesForQuery)
+  }
+  
+  // 通知用户
+  yield createSystemMessage(
+    `Switched to ${renderModelName(fallbackModel)} due to high demand`,
+    'warning',
+  )
+  continue
+}
 ```
 
 ### 4. 图像处理错误
 
 ```typescript
-// 图像太大或格式不支持
 if (error instanceof ImageSizeError || error instanceof ImageResizeError) {
-  // 将图像替换为错误消息，继续执行
-  yield createAssistantAPIErrorMessage(error.message);
-  // 不中断循环
+  yield createAssistantAPIErrorMessage({ content: error.message })
+  return { reason: 'image_error' }
+  // 不继续循环，直接退出
 }
 ```
+
+### 5. 用户中断（AbortController）
+
+```typescript
+if (toolUseContext.abortController.signal.aborted) {
+  // 消费 StreamingToolExecutor 中剩余的工具
+  // （生成合成的 tool_result 块，保持消息格式合法）
+  for await (const update of streamingToolExecutor.getRemainingResults()) {
+    if (update.message) yield update.message
+  }
+  
+  // 非 submit-interrupt 才发送中断消息
+  if (toolUseContext.abortController.signal.reason !== 'interrupt') {
+    yield createUserInterruptionMessage({ toolUse: false })
+  }
+  return { reason: 'aborted_streaming' }
+}
+```
+
+### Stop Hooks 集成
+
+每次 AI 响应完成（无工具调用）后，系统会执行 stop hooks：
+
+```typescript
+const stopHookResult = yield* handleStopHooks(
+  messagesForQuery, assistantMessages,
+  systemPrompt, userContext, systemContext,
+  toolUseContext, querySource, stopHookActive,
+)
+
+if (stopHookResult.preventContinuation) {
+  return { reason: 'stop_hook_prevented' }
+}
+
+if (stopHookResult.blockingErrors.length > 0) {
+  // Stop hook 注入了新的错误消息，继续循环处理
+  state = {
+    messages: [...messagesForQuery, ...assistantMessages, ...stopHookResult.blockingErrors],
+    transition: { reason: 'stop_hook_blocking_error' },
+    // ...
+  }
+  continue
+}
+```
+
+**重要**：API 错误消息（rate limit、auth failure 等）会跳过 stop hooks，防止"错误 → hook 重试 → 错误"的死循环。
 
 ---
 

@@ -117,50 +117,120 @@ const requestParams: BetaMessageStreamParams = {
 
 ## 11.5 Prompt 缓存
 
-Claude API 支持 Prompt 缓存，减少重复内容的 Token 消耗：
+Claude API 支持 Prompt 缓存，减少重复内容的 Token 消耗。缓存控制逻辑在 [src/services/api/claude.ts](../../src/services/api/claude.ts) 中实现：
 
 ```typescript
-// 系统提示缓存
-function buildSystemPromptWithCaching(systemPrompt: SystemPrompt): TextBlockParam[] {
-  return systemPrompt.map((part, index) => ({
-    type: 'text',
-    text: part,
-    // 最后一个系统提示块标记为可缓存
-    ...(index === systemPrompt.length - 1 ? {
-      cache_control: { type: 'ephemeral' }
-    } : {}),
-  }));
+// 缓存控制对象的构建
+export function getCacheControl({
+  scope,
+  querySource,
+}: {
+  scope?: CacheScope
+  querySource?: QuerySource
+} = {}): { type: 'ephemeral'; ttl?: '1h'; scope?: 'global' } {
+  return {
+    type: 'ephemeral',
+    // 1 小时 TTL：仅对特定用户类型和 querySource 白名单启用
+    ...(should1hCacheTTL(querySource) && { ttl: '1h' }),
+    // global scope：跨用户共享缓存（仅 Anthropic 内部）
+    ...(scope === 'global' && { scope }),
+  }
 }
+```
+
+**1 小时 TTL 的启用条件**（`should1hCacheTTL`）：
+
+```typescript
+function should1hCacheTTL(querySource?: QuerySource): boolean {
+  // Bedrock 用户需要显式环境变量
+  if (getAPIProvider() === 'bedrock' && isEnvTruthy(process.env.ENABLE_PROMPT_CACHING_1H_BEDROCK))
+    return true
+
+  // 用户资格检查（claude.ai 订阅用户且未超额）
+  let userEligible = getPromptCache1hEligible()
+  if (userEligible === null) {
+    userEligible = process.env.USER_TYPE === 'ant' ||
+      (isClaudeAISubscriber() && !currentLimits.isUsingOverage)
+    setPromptCache1hEligible(userEligible)
+  }
+  if (!userEligible) return false
+
+  // querySource 白名单（通过 GrowthBook feature flag 控制）
+  const config = getFeatureValue_CACHED_MAY_BE_STALE<{ allowlist?: string[] }>(
+    'tengu_prompt_cache_1h_config', {}
+  )
+  const allowlist = config.allowlist ?? []
+  return querySource !== undefined &&
+    allowlist.some(pattern =>
+      pattern.endsWith('*')
+        ? querySource.startsWith(pattern.slice(0, -1))
+        : querySource === pattern,
+    )
+}
+```
+
+**缓存禁用的环境变量**：
+
+```
+DISABLE_PROMPT_CACHING=1          → 全局禁用
+DISABLE_PROMPT_CACHING_HAIKU=1    → 仅禁用 Haiku 模型的缓存
+DISABLE_PROMPT_CACHING_SONNET=1   → 仅禁用 Sonnet 模型的缓存
+DISABLE_PROMPT_CACHING_OPUS=1     → 仅禁用 Opus 模型的缓存
 ```
 
 ---
 
 ## 11.6 重试与错误处理
 
-[src/services/api/withRetry.ts](../../src/services/api/withRetry.ts)（28KB）实现了完整的重试逻辑：
+[src/services/api/withRetry.ts](../../src/services/api/withRetry.ts) 实现了完整的重试逻辑，并支持模型降级：
 
 ```typescript
-// 可重试的错误类型
-const RETRYABLE_ERRORS = [
-  'overloaded_error',    // 服务器过载
-  'api_error',           // 临时 API 错误
-  'timeout',             // 请求超时
-];
+// withRetry 的核心签名
+export async function withRetry<T>(
+  createClient: () => AnthropicClient,
+  fn: (client: AnthropicClient) => Promise<T>,
+  options: {
+    maxRetries?: number
+    model: string
+    thinkingConfig: ThinkingConfig
+  },
+): Promise<T>
+```
 
-// 指数退避重试
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries = 3,
-): Promise<T> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      if (attempt === maxRetries || !isRetryable(error)) throw error;
-      
-      // 指数退避：1s, 2s, 4s
-      await sleep(Math.pow(2, attempt) * 1000);
-    }
+**FallbackTriggeredError**：当主模型不可用时，`withRetry` 抛出此错误，`queryLoop` 捕获后切换到备用模型：
+
+```typescript
+export class FallbackTriggeredError extends Error {
+  constructor(
+    public readonly originalModel: string,
+    public readonly fallbackModel: string,
+    public readonly originalError: unknown,
+  ) { super('Model fallback triggered') }
+}
+```
+
+**非流式回退**（`executeNonStreamingRequest`）：
+
+当流式请求失败时，系统会尝试非流式请求作为回退：
+
+```typescript
+async function* executeNonStreamingRequest(
+  anthropic: AnthropicClient,
+  params: BetaMessageStreamParams,
+): AsyncGenerator<BetaRawMessageStreamEvent> {
+  // 120s 超时（远程模式），300s（默认）
+  const timeout = isRemoteMode() ? 120_000 : 300_000
+
+  try {
+    const response = await anthropic.beta.messages.create({
+      ...params,
+      stream: false,
+    }, { timeout })
+    // 将非流式响应转换为流式事件格式
+    yield* convertToStreamEvents(response)
+  } catch (error) {
+    logEvent('tengu_nonstreaming_fallback_error', { error: String(error) })
+    throw error
   }
 }
 ```
@@ -179,33 +249,103 @@ export function updateUsage(usage: NonNullableUsage, model: string): void {
     usage.cache_creation_input_tokens,
     usage.cache_read_input_tokens,
     model,
-  );
-  
-  // 更新全局状态
-  addTotalCost(cost);
-  addModelUsage(model, usage);
+  )
+  addTotalCost(cost)
+  addModelUsage(model, usage)
+}
+```
+
+**Token 使用量的四个维度**：
+- `input_tokens`：普通输入 token
+- `output_tokens`：输出 token
+- `cache_creation_input_tokens`：创建缓存的 token（首次缓存时计费）
+- `cache_read_input_tokens`：读取缓存的 token（命中缓存时折扣计费）
+
+---
+
+## 11.8 Beta 功能与请求参数
+
+系统通过 beta headers 启用实验性功能：
+
+```typescript
+// src/constants/betas.ts 中定义的 beta headers
+const AFK_MODE_BETA_HEADER = 'afk-mode-2025-01-01'
+const CONTEXT_1M_BETA_HEADER = 'max-tokens-3-5-sonnet-2024-07-15'
+const EFFORT_BETA_HEADER = 'thinking-effort-2025-01-01'
+const FAST_MODE_BETA_HEADER = 'fast-mode-2025-01-01'
+const PROMPT_CACHING_BETA_HEADER = 'prompt-caching-2024-07-31'
+const TASK_BUDGETS_BETA_HEADER = 'task-budgets-2025-01-01'
+```
+
+**Effort 参数配置**（控制思考深度）：
+
+```typescript
+function configureEffortParams(
+  effortValue: EffortValue | undefined,
+  outputConfig: BetaOutputConfig,
+  extraBodyParams: Record<string, unknown>,
+  betas: string[],
+  model: string,
+): void {
+  if (!modelSupportsEffort(model) || 'effort' in outputConfig) return
+
+  if (effortValue === undefined) {
+    betas.push(EFFORT_BETA_HEADER)  // 启用 effort 但不指定值（使用模型默认）
+  } else if (typeof effortValue === 'string') {
+    outputConfig.effort = effortValue  // 'low' | 'medium' | 'high'
+    betas.push(EFFORT_BETA_HEADER)
+  } else if (process.env.USER_TYPE === 'ant') {
+    // 内部用户可以传入数值 effort_override
+    extraBodyParams.anthropic_internal = {
+      ...extraBodyParams.anthropic_internal,
+      effort_override: effortValue,
+    }
+  }
+}
+```
+
+**Task Budget 参数**（控制 token 预算）：
+
+```typescript
+export function configureTaskBudgetParams(
+  taskBudget: Options['taskBudget'],
+  outputConfig: BetaOutputConfig & { task_budget?: TaskBudgetParam },
+  betas: string[],
+): void {
+  if (!taskBudget || 'task_budget' in outputConfig) return
+
+  outputConfig.task_budget = {
+    type: 'tokens',
+    total: taskBudget.total,
+    ...(taskBudget.remaining !== undefined && { remaining: taskBudget.remaining }),
+  }
+  if (!betas.includes(TASK_BUDGETS_BETA_HEADER)) {
+    betas.push(TASK_BUDGETS_BETA_HEADER)
+  }
 }
 ```
 
 ---
 
-## 11.8 Fast Mode
+## 11.9 消息格式转换
 
-Fast Mode 使用相同的 Claude Opus 4.6 模型，但通过优化的请求参数提高响应速度：
+内部消息类型与 API 消息类型之间的转换：
 
 ```typescript
-// src/utils/fastMode.ts
-export function isFastModeEnabled(): boolean {
-  return getGlobalConfig().fastMode === true;
-}
+// 内部 UserMessage → API MessageParam
+function userMessageToMessageParam(
+  message: UserMessage,
+  enableCaching: boolean,
+): MessageParam
 
-// Fast Mode 下调整请求参数
-if (isFastModeEnabled()) {
-  requestParams.max_tokens = Math.min(requestParams.max_tokens, 4096);
-  // 禁用思考模式以提高速度
-  delete requestParams.thinking;
-}
+// 内部 AssistantMessage → API MessageParam
+function assistantMessageToMessageParam(
+  message: AssistantMessage,
+  enableCaching: boolean,
+): MessageParam
 ```
+
+**缓存标记的放置策略**：缓存控制标记放在消息历史的最后几个 `user` 消息上，确保最近的上下文被缓存，而不是整个历史。
 
 ---
 

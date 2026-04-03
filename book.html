@@ -1,0 +1,1410 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code 源码深度解析</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+
+.sidebar { position: fixed; left: 0; top: 0; width: 240px; height: 100vh; background: #1a1d27; border-right: 1px solid #2d3148; overflow-y: auto; z-index: 100; }
+.sidebar-title { padding: 20px 16px 12px; font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #2d3148; }
+.nav-group { padding: 8px 0 4px; }
+.nav-group-label { padding: 6px 16px 4px; font-size: 10px; color: #4b5563; text-transform: uppercase; letter-spacing: 1px; }
+.nav-item { padding: 8px 16px; cursor: pointer; font-size: 12px; color: #9ca3af; border-left: 3px solid transparent; transition: all 0.2s; display: flex; align-items: center; gap: 8px; }
+.nav-item:hover { color: #e2e8f0; background: #252836; }
+.nav-item.active { color: #818cf8; border-left-color: #818cf8; background: #1e2035; }
+.nav-num { font-size: 10px; color: #4b5563; min-width: 20px; }
+
+.main { margin-left: 240px; padding: 40px; max-width: 960px; }
+.section { display: none; }
+.section.active { display: block; }
+
+h1 { font-size: 28px; font-weight: 700; color: #c7d2fe; margin-bottom: 8px; }
+.subtitle { color: #6b7280; font-size: 14px; margin-bottom: 32px; }
+h2 { font-size: 20px; color: #a5b4fc; margin: 32px 0 16px; font-weight: 600; }
+h3 { font-size: 15px; color: #93c5fd; margin: 24px 0 10px; font-weight: 600; }
+p { color: #9ca3af; line-height: 1.7; margin-bottom: 12px; font-size: 14px; }
+
+pre { background: #12141f; border: 1px solid #2d3148; border-radius: 8px; padding: 16px; overflow-x: auto; margin: 12px 0; }
+code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 12.5px; color: #a5f3fc; }
+pre code { color: #e2e8f0; }
+.kw { color: #c084fc; }
+.ty { color: #34d399; }
+.cm { color: #4b5563; }
+.st { color: #fbbf24; }
+
+.card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px; padding: 20px; margin: 16px 0; }
+.card-title { font-size: 13px; font-weight: 600; color: #818cf8; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+.layer-stack { display: flex; flex-direction: column; gap: 4px; margin: 16px 0; }
+.layer { padding: 14px 20px; border-radius: 8px; cursor: pointer; transition: all 0.2s; border: 1px solid transparent; }
+.layer:hover { transform: translateX(4px); }
+.layer.l5 { background: #2d1b4e; border-color: #7c3aed; }
+.layer.l4 { background: #1e3a5f; border-color: #2563eb; }
+.layer.l3 { background: #1a3a2a; border-color: #16a34a; }
+.layer.l2 { background: #3a2a10; border-color: #d97706; }
+.layer.l1 { background: #3a1a1a; border-color: #dc2626; }
+.layer-name { font-size: 14px; font-weight: 600; color: #f1f5f9; }
+.layer-file { font-size: 11px; color: #94a3b8; margin-top: 3px; font-family: monospace; }
+.layer-detail { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 13px; color: #cbd5e1; line-height: 1.6; }
+.layer.open .layer-detail { display: block; }
+
+table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+th { background: #1e2035; color: #818cf8; padding: 10px 14px; text-align: left; font-weight: 600; }
+td { padding: 9px 14px; border-bottom: 1px solid #1e2035; color: #9ca3af; }
+tr:hover td { background: #1a1d27; color: #e2e8f0; }
+
+.flow { display: flex; flex-direction: column; gap: 0; margin: 16px 0; }
+.flow-step { display: flex; align-items: flex-start; gap: 12px; }
+.flow-line { display: flex; flex-direction: column; align-items: center; }
+.flow-dot { width: 10px; height: 10px; border-radius: 50%; background: #818cf8; margin-top: 4px; flex-shrink: 0; }
+.flow-connector { width: 2px; background: #2d3148; flex: 1; min-height: 20px; }
+.flow-content { padding-bottom: 16px; }
+.flow-label { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+.flow-desc { font-size: 12px; color: #6b7280; margin-top: 2px; }
+
+.tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-family: monospace; margin: 2px; }
+.tag-purple { background: #2d1b4e; color: #c084fc; border: 1px solid #7c3aed; }
+.tag-blue { background: #1e3a5f; color: #93c5fd; border: 1px solid #2563eb; }
+.tag-green { background: #1a3a2a; color: #6ee7b7; border: 1px solid #16a34a; }
+.tag-yellow { background: #3a2a10; color: #fcd34d; border: 1px solid #d97706; }
+.tag-red { background: #3a1a1a; color: #fca5a5; border: 1px solid #dc2626; }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+@media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } .main { margin-left: 0; padding: 20px; } .sidebar { display: none; } }
+
+.callout { background: #1e2035; border-left: 3px solid #818cf8; border-radius: 0 8px 8px 0; padding: 12px 16px; margin: 12px 0; font-size: 13px; color: #9ca3af; line-height: 1.6; }
+.callout strong { color: #c7d2fe; }
+.section-intro { background: #12141f; border: 1px solid #2d3148; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px; font-size: 13px; color: #9ca3af; line-height: 1.7; }
+
+.tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin: 12px 0; }
+.tool-card { background: #12141f; border: 1px solid #2d3148; border-radius: 8px; padding: 12px; }
+.tool-card-name { font-size: 12px; font-weight: 600; font-family: monospace; color: #a5f3fc; margin-bottom: 4px; }
+.tool-card-desc { font-size: 11px; color: #6b7280; line-height: 1.5; }
+
+.badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+.badge-allow { background: #1a3a2a; color: #6ee7b7; }
+.badge-deny { background: #3a1a1a; color: #fca5a5; }
+.badge-ask { background: #3a2a10; color: #fcd34d; }
+
+.permission-flow { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
+.pf-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 8px; background: #12141f; border: 1px solid #2d3148; font-size: 13px; }
+.pf-arrow { color: #4b5563; font-size: 18px; text-align: center; }
+.pf-label { color: #e2e8f0; font-weight: 500; flex: 1; }
+.pf-note { color: #6b7280; font-size: 11px; }
+
+.mem-layer { display: flex; gap: 12px; align-items: flex-start; padding: 12px 16px; border-radius: 8px; margin: 6px 0; border: 1px solid #2d3148; background: #12141f; }
+.mem-layer-num { font-size: 11px; font-weight: 700; min-width: 60px; padding: 3px 8px; border-radius: 4px; text-align: center; }
+.mem-layer-body { flex: 1; }
+.mem-layer-title { font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 3px; }
+.mem-layer-desc { font-size: 12px; color: #6b7280; }
+.mem-layer-path { font-size: 11px; font-family: monospace; color: #4b5563; margin-top: 3px; }
+
+.progress-bar { height: 4px; background: #2d3148; border-radius: 2px; margin: 24px 0 8px; }
+.progress-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, #818cf8, #c084fc); transition: width 0.3s; }
+.progress-label { font-size: 11px; color: #4b5563; text-align: right; }
+.nav-footer { padding: 16px; border-top: 1px solid #2d3148; }
+.btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
+.btn-primary { background: #4f46e5; color: white; }
+.btn-primary:hover { background: #4338ca; }
+.btn-ghost { background: transparent; color: #6b7280; border: 1px solid #2d3148; }
+.btn-ghost:hover { color: #e2e8f0; border-color: #4b5563; }
+.nav-btns { display: flex; gap: 8px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <div class="sidebar-title">Claude Code 源码解析</div>
+  <div class="nav-group">
+    <div class="nav-group-label">第一部分：全局概览</div>
+    <div class="nav-item active" onclick="goto(0)"><span class="nav-num">01</span> 项目概述与架构全景</div>
+  </div>
+  <div class="nav-group">
+    <div class="nav-group-label">第二部分：核心引擎</div>
+    <div class="nav-item" onclick="goto(1)"><span class="nav-num">02</span> 启动流程与初始化</div>
+    <div class="nav-item" onclick="goto(2)"><span class="nav-num">03</span> 查询引擎与 Agent 循环</div>
+    <div class="nav-item" onclick="goto(3)"><span class="nav-num">04</span> 工具系统</div>
+  </div>
+  <div class="nav-group">
+    <div class="nav-group-label">第三部分：权限与安全</div>
+    <div class="nav-item" onclick="goto(4)"><span class="nav-num">05</span> 权限系统</div>
+    <div class="nav-item" onclick="goto(5)"><span class="nav-num">06</span> 认证与凭证管理</div>
+  </div>
+  <div class="nav-group">
+    <div class="nav-group-label">第四部分：终端 UI</div>
+    <div class="nav-item" onclick="goto(6)"><span class="nav-num">07</span> 终端渲染引擎（Ink）</div>
+    <div class="nav-item" onclick="goto(7)"><span class="nav-num">08</span> UI 组件系统</div>
+  </div>
+  <div class="nav-group">
+    <div class="nav-group-label">第五部分：外部集成</div>
+    <div class="nav-item" onclick="goto(8)"><span class="nav-num">09</span> MCP 集成</div>
+    <div class="nav-item" onclick="goto(9)"><span class="nav-num">10</span> VS Code Bridge</div>
+    <div class="nav-item" onclick="goto(10)"><span class="nav-num">11</span> Claude API 集成</div>
+  </div>
+  <div class="nav-group">
+    <div class="nav-group-label">第六部分：高级特性</div>
+    <div class="nav-item" onclick="goto(11)"><span class="nav-num">12</span> 多 Agent 协调</div>
+    <div class="nav-item" onclick="goto(12)"><span class="nav-num">13</span> 内存系统</div>
+    <div class="nav-item" onclick="goto(13)"><span class="nav-num">14</span> 会话管理</div>
+    <div class="nav-item" onclick="goto(14)"><span class="nav-num">15</span> 插件与技能系统</div>
+  </div>
+  <div class="nav-group">
+    <div class="nav-group-label">第七部分：提示词工程</div>
+    <div class="nav-item" onclick="goto(15)"><span class="nav-num">16</span> 提示词工程艺术</div>
+  </div>
+  <div class="nav-group">
+    <div class="nav-group-label">第八部分：工程实践</div>
+    <div class="nav-item" onclick="goto(16)"><span class="nav-num">17</span> 状态管理</div>
+    <div class="nav-item" onclick="goto(17)"><span class="nav-num">18</span> 构建系统与性能优化</div>
+    <div class="nav-item" onclick="goto(18)"><span class="nav-num">19</span> 可观测性与遥测</div>
+  </div>
+  <div class="nav-footer">
+    <div class="progress-bar"><div class="progress-fill" id="prog" style="width:5.2%"></div></div>
+    <div class="progress-label" id="prog-label">1 / 19</div>
+    <div class="nav-btns">
+      <button class="btn btn-ghost" onclick="prev()">← 上一章</button>
+      <button class="btn btn-primary" onclick="next()">下一章 →</button>
+    </div>
+  </div>
+</div>
+<div class="main">
+<!-- Section 0: Ch01 Overview -->
+<div class="section active" id="s0">
+  <h1>第 1 章：项目概述与架构全景</h1>
+  <p class="subtitle">Claude Code 是什么 · 整体架构 · 技术栈 · 代码规模</p>
+  <div class="section-intro">Claude Code 是 Anthropic 官方出品的 AI 编程助手 CLI 工具（版本 2.1.88），以 npm 包 <code>@anthropic-ai/claude-code</code> 发布。它不是简单的命令行包装器，而是一个完整的 AI 代理系统。</div>
+
+  <h2>1.1 整体架构</h2>
+  <div class="layer-stack">
+    <div class="layer l5" onclick="this.classList.toggle('open')">
+      <div class="layer-name">用户界面层</div>
+      <div class="layer-file">终端 REPL · VS Code IDE · Web (claude.ai)</div>
+      <div class="layer-detail">三种入口：终端交互式 REPL、VS Code 扩展（通过 Bridge）、Web 端远程会话。所有入口最终都连接到同一个核心引擎。</div>
+    </div>
+    <div class="layer l4" onclick="this.classList.toggle('open')">
+      <div class="layer-name">核心引擎层</div>
+      <div class="layer-file">QueryEngine · Agent Loop · Token Budget · Tool Router</div>
+      <div class="layer-detail">QueryEngine 是整个系统的大脑，管理多轮对话状态。Agent Loop 驱动 AI ↔ 工具的交互循环。Token Budget 防止无限循环。</div>
+    </div>
+    <div class="layer l3" onclick="this.classList.toggle('open')">
+      <div class="layer-name">工具执行层</div>
+      <div class="layer-file">文件工具 · Shell 工具 · Web 工具 · Agent 工具</div>
+      <div class="layer-detail">45 个内置工具覆盖文件操作（Read/Write/Edit/Glob/Grep）、Shell 执行（Bash/PowerShell）、Web 访问（Fetch/Search）、子 Agent 派发。</div>
+    </div>
+    <div class="layer l2" onclick="this.classList.toggle('open')">
+      <div class="layer-name">权限安全层</div>
+      <div class="layer-file">Permission System · MDM Policy · Denial Tracking</div>
+      <div class="layer-detail">六种权限模式，三类规则（allow/deny/ask），AI 分类器自动判断危险命令，拒绝次数追踪防止过度保守。</div>
+    </div>
+    <div class="layer l1" onclick="this.classList.toggle('open')">
+      <div class="layer-name">外部服务层</div>
+      <div class="layer-file">Claude API · MCP Servers · Bedrock · Vertex AI</div>
+      <div class="layer-detail">支持 Anthropic 直连、AWS Bedrock、Google Cloud Vertex AI 三种 AI 平台。MCP 协议允许接入任意外部服务。</div>
+    </div>
+  </div>
+
+  <h2>1.2 技术栈</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">核心技术</div>
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:13px;">
+        <div><span class="tag tag-blue">TypeScript</span><span style="color:#6b7280;margin-left:8px;">1,884 个 .ts/.tsx 文件</span></div>
+        <div><span class="tag tag-green">Node.js 18+</span><span style="color:#6b7280;margin-left:8px;">运行时，原生 ESM</span></div>
+        <div><span class="tag tag-purple">Bun</span><span style="color:#6b7280;margin-left:8px;">构建工具，单文件打包</span></div>
+        <div><span class="tag tag-yellow">React + Ink</span><span style="color:#6b7280;margin-left:8px;">终端 UI 渲染</span></div>
+        <div><span class="tag tag-red">Yoga</span><span style="color:#6b7280;margin-left:8px;">Flexbox 布局引擎</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">代码规模</div>
+      <table>
+        <tr><th>模块</th><th>文件数</th></tr>
+        <tr><td>components/</td><td>146</td></tr>
+        <tr><td>tools/</td><td>45</td></tr>
+        <tr><td>commands/</td><td>103</td></tr>
+        <tr><td>hooks/</td><td>87</td></tr>
+        <tr><td>utils/</td><td>100+</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h2>1.3 单文件分发策略</h2>
+  <div class="callout">所有 1,884 个 TypeScript 文件被打包成单个 <strong>cli.js（13MB）</strong>，用户安装后无需额外依赖解析，启动速度快，版本一致性有保证。</div>
+
+  <h2>1.4 五个核心概念</h2>
+  <div class="tool-grid">
+    <div class="tool-card"><div class="tool-card-name">QueryEngine</div><div class="tool-card-desc">管理整个 AI 对话循环，是系统的"大脑"</div></div>
+    <div class="tool-card"><div class="tool-card-name">Tool（工具）</div><div class="tool-card-desc">AI 与真实世界交互的唯一通道，45 个内置工具</div></div>
+    <div class="tool-card"><div class="tool-card-name">Permission（权限）</div><div class="tool-card-desc">安全护栏，每次工具执行前决定允许/询问/拒绝</div></div>
+    <div class="tool-card"><div class="tool-card-name">Command（命令）</div><div class="tool-card-desc">斜杠命令，预定义工作流，如 /commit、/review</div></div>
+    <div class="tool-card"><div class="tool-card-name">Agent（代理）</div><div class="tool-card-desc">子助手，可并行处理复杂任务，形成多 Agent 网络</div></div>
+  </div>
+</div>
+<!-- Section 1: Ch02 Bootstrap -->
+<div class="section" id="s1">
+  <h1>第 2 章：启动流程与初始化</h1>
+  <p class="subtitle">快速路径设计 · 并行 I/O 优化 · init() 函数 · 全局状态</p>
+
+  <h2>2.1 启动流程全景</h2>
+  <div class="flow">
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot"></div><div class="flow-connector"></div></div>
+      <div class="flow-content"><div class="flow-label">用户输入 <code>claude</code></div><div class="flow-desc">Node.js 加载 cli.js（13MB 打包文件）</div></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot" style="background:#34d399"></div><div class="flow-connector"></div></div>
+      <div class="flow-content"><div class="flow-label">src/entrypoints/cli.tsx</div><div class="flow-desc">快速路径检查（--version 零模块加载）</div></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot" style="background:#fbbf24"></div><div class="flow-connector"></div></div>
+      <div class="flow-content"><div class="flow-label">src/main.tsx</div><div class="flow-desc">并行启动 MDM 读取 + Keychain 预取（节省 ~115ms）</div></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot" style="background:#c084fc"></div><div class="flow-connector"></div></div>
+      <div class="flow-content"><div class="flow-label">init() 函数</div><div class="flow-desc">配置系统、TLS、代理、遥测初始化</div></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot" style="background:#f87171"></div></div>
+      <div class="flow-content"><div class="flow-label">launchRepl() 或 runHeadless()</div><div class="flow-desc">React + Ink 渲染 REPL 界面</div></div>
+    </div>
+  </div>
+
+  <h2>2.2 快速路径设计</h2>
+  <div class="card">
+    <div class="card-title">cli.tsx — 零模块加载的 --version</div>
+    <pre><code><span class="kw">if</span> (args.length === 1 && (args[0] === <span class="st">'--version'</span> || args[0] === <span class="st">'-v'</span>)) {
+  <span class="cm">// MACRO.VERSION 在构建时内联，无需加载任何模块</span>
+  console.log(<span class="st">`${MACRO.VERSION} (Claude Code)`</span>);
+  <span class="kw">return</span>;
+}</code></pre>
+  </div>
+  <table>
+    <tr><th>参数</th><th>处理方式</th><th>模块加载量</th></tr>
+    <tr><td><code>--version</code></td><td>直接输出版本号退出</td><td><span class="badge badge-allow">零</span></td></tr>
+    <tr><td><code>--dump-system-prompt</code></td><td>输出系统提示后退出</td><td>最小</td></tr>
+    <tr><td><code>remote-control</code></td><td>启动 Bridge 模式</td><td>Bridge 模块</td></tr>
+    <tr><td>正常启动</td><td>完整 REPL 初始化</td><td>全部模块</td></tr>
+  </table>
+
+  <h2>2.3 并行 I/O 优化</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">串行启动（优化前）</div>
+      <p style="font-family:monospace;font-size:12px;color:#9ca3af;">加载模块 ~135ms<br>MDM 读取 ~50ms ← 顺序<br>Keychain ~65ms ← 顺序<br><strong style="color:#f87171;">总计: ~250ms</strong></p>
+    </div>
+    <div class="card">
+      <div class="card-title">并行启动（优化后）</div>
+      <p style="font-family:monospace;font-size:12px;color:#9ca3af;">加载模块 ~135ms<br>├ MDM 读取 ~50ms ← 并行<br>└ Keychain ~65ms ← 并行<br><strong style="color:#6ee7b7;">总计: ~135ms（节省 115ms）</strong></p>
+    </div>
+  </div>
+
+  <h2>2.4 init() 函数核心步骤</h2>
+  <div class="permission-flow">
+    <div class="pf-row"><div class="pf-label">1. enableConfigs()</div><div class="pf-note">启用配置系统</div></div>
+    <div class="pf-row"><div class="pf-label">2. applySafeConfigEnvironmentVariables()</div><div class="pf-note">信任对话框前只应用安全配置</div></div>
+    <div class="pf-row"><div class="pf-label">3. applyExtraCACertsFromConfig()</div><div class="pf-note">TLS 证书必须在第一次握手前配置</div></div>
+    <div class="pf-row"><div class="pf-label">4. 异步初始化遥测 + GrowthBook</div><div class="pf-note">不阻塞主流程（~400KB 懒加载）</div></div>
+    <div class="pf-row"><div class="pf-label">5. configureGlobalMTLS() + configureGlobalAgents()</div><div class="pf-note">mTLS 和 HTTP 代理配置</div></div>
+  </div>
+
+  <h2>2.5 全局状态 bootstrap/state.ts</h2>
+  <div class="callout"><strong>注意：</strong>源码注释明确警告 <code>DO NOT ADD MORE STATE HERE - BE JUDICIOUS WITH GLOBAL STATE</code>。全局状态包含 150+ 个属性，通过 getter/setter 函数访问，而非直接暴露状态对象。</div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">关键状态字段</div>
+      <div style="font-size:12px;color:#9ca3af;line-height:2;">
+        <div><code style="color:#a5f3fc;">sessionId</code> — 唯一会话 ID</div>
+        <div><code style="color:#a5f3fc;">totalCostUSD</code> — 累计 API 费用</div>
+        <div><code style="color:#a5f3fc;">mainLoopModel</code> — 当前模型配置</div>
+        <div><code style="color:#a5f3fc;">bypassPermissionsMode</code> — 权限绕过标志</div>
+        <div><code style="color:#a5f3fc;">mcpServers</code> — MCP 服务器配置</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">调试保护</div>
+      <pre><code><span class="cm">// 外部构建检测到调试器时直接退出</span>
+<span class="kw">if</span> (<span class="st">"external"</span> !== <span class="st">'ant'</span> && isBeingDebugged()) {
+  process.exit(1);
+}
+<span class="cm">// 检查 --inspect 参数、NODE_OPTIONS
+// 和 inspector 模块 URL</span></code></pre>
+    </div>
+  </div>
+</div>
+<!-- Section 2: Ch03 QueryEngine -->
+<div class="section" id="s2">
+  <h1>第 3 章：查询引擎与 Agent 循环</h1>
+  <p class="subtitle">QueryEngine · queryLoop · 流式工具执行 · Token 预算 · 错误恢复</p>
+
+  <h2>3.1 架构概述</h2>
+  <div class="card">
+    <div class="card-title">调用链路</div>
+    <pre><code>用户消息
+  → QueryEngine.submitMessage()   <span class="cm">← 会话级别（跨轮次持久化状态）</span>
+  → query()                        <span class="cm">← 单次查询入口</span>
+  → queryLoop()                    <span class="cm">← 核心循环（while(true)）</span>
+      ├─► callModel()              <span class="cm">← 调用 Claude API（流式）</span>
+      ├─► StreamingToolExecutor    <span class="cm">← 并发工具执行</span>
+      ├─► checkTokenBudget()       <span class="cm">← Token 预算检查</span>
+      └─► 错误恢复逻辑</code></pre>
+  </div>
+
+  <h2>3.2 循环状态机</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">Continue（继续原因）</div>
+      <div style="display:flex;flex-direction:column;gap:6px;font-size:12px;">
+        <div><span class="tag tag-green">tool_use</span> AI 调用了工具</div>
+        <div><span class="tag tag-green">token_budget_continuation</span> Token 未用完</div>
+        <div><span class="tag tag-green">max_output_tokens_recovery</span> 输出被截断</div>
+        <div><span class="tag tag-green">prompt_too_long_compact</span> 上下文压缩后重试</div>
+        <div><span class="tag tag-green">fallback_model</span> 切换备用模型</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Terminal（终止原因）</div>
+      <div style="display:flex;flex-direction:column;gap:6px;font-size:12px;">
+        <div><span class="tag tag-blue">end_turn</span> 正常结束</div>
+        <div><span class="tag tag-yellow">max_turns</span> 达到最大轮次</div>
+        <div><span class="tag tag-yellow">max_budget</span> 超出费用预算</div>
+        <div><span class="tag tag-red">error</span> 不可恢复错误</div>
+      </div>
+    </div>
+  </div>
+
+  <h2>3.3 流式工具执行（并发规则）</h2>
+  <div class="callout"><strong>关键设计：</strong>工具调用在 AI 流式输出过程中<strong>实时发现、实时开始执行</strong>，不等待 AI 完成整个响应。</div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">并发安全工具（可并行）</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">
+        <span class="tag tag-green">FileReadTool</span>
+        <span class="tag tag-green">GlobTool</span>
+        <span class="tag tag-green">GrepTool</span>
+        <span class="tag tag-green">WebFetchTool</span>
+        <span class="tag tag-green">WebSearchTool</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">非并发安全工具（必须串行）</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">
+        <span class="tag tag-red">FileWriteTool</span>
+        <span class="tag tag-red">FileEditTool</span>
+        <span class="tag tag-red">BashTool</span>
+        <span class="tag tag-red">PowerShellTool</span>
+      </div>
+    </div>
+  </div>
+
+  <h2>3.4 Token 预算管理</h2>
+  <div class="card">
+    <div class="card-title">src/query/tokenBudget.ts — 关键阈值</div>
+    <pre><code><span class="kw">const</span> COMPLETION_THRESHOLD = <span class="st">0.9</span>;   <span class="cm">// 90% 使用率触发停止</span>
+<span class="kw">const</span> DIMINISHING_THRESHOLD = <span class="st">500</span>;  <span class="cm">// 连续增量 &lt; 500 token = "原地打转"</span>
+
+<span class="cm">// 检测原地打转：连续 3 次续写，每次新增 &lt; 500 token</span>
+<span class="kw">const</span> isDiminishing =
+  tracker.continuationCount >= <span class="st">3</span> &&
+  deltaSinceLastCheck < DIMINISHING_THRESHOLD &&
+  tracker.lastDeltaTokens < DIMINISHING_THRESHOLD;</code></pre>
+  </div>
+
+  <h2>3.5 错误恢复机制</h2>
+  <table>
+    <tr><th>错误类型</th><th>恢复策略</th></tr>
+    <tr><td>上下文过长（413）</td><td>触发自动压缩，将历史消息压缩为摘要后重试</td></tr>
+    <tr><td>输出截断（max_output_tokens）</td><td>最多重试 3 次，发送"请继续"消息</td></tr>
+    <tr><td>主模型不可用</td><td>切换到 fallbackModel 备用模型</td></tr>
+    <tr><td>图像处理错误</td><td>将图像替换为错误消息，不中断循环</td></tr>
+  </table>
+</div>
+<!-- Section 3: Ch04 Tools -->
+<div class="section" id="s3">
+  <h1>第 4 章：工具系统</h1>
+  <p class="subtitle">Tool 接口 · 45 个工具 · 并发安全 · 结果大小控制</p>
+
+  <h2>4.1 Tool 接口核心字段</h2>
+  <div class="card">
+    <div class="card-title">src/Tool.ts — 工具接口定义</div>
+    <pre><code><span class="kw">type</span> <span class="ty">Tool</span> = {
+  name: <span class="ty">string</span>                    <span class="cm">// 工具名称</span>
+  call(args, context, ...): <span class="ty">Promise</span>&lt;<span class="ty">ToolResult</span>&gt;  <span class="cm">// 执行逻辑</span>
+  checkPermissions(input, ctx): <span class="ty">Promise</span>&lt;<span class="ty">PermissionResult</span>&gt;
+  isConcurrencySafe(input): <span class="ty">boolean</span>  <span class="cm">// 是否可并行</span>
+  isReadOnly(input): <span class="ty">boolean</span>         <span class="cm">// 是否只读</span>
+  inputSchema: <span class="ty">ZodSchema</span>             <span class="cm">// Zod 输入验证</span>
+  maxResultSizeChars: <span class="ty">number</span>         <span class="cm">// 结果大小限制</span>
+}</code></pre>
+  </div>
+
+  <h2>4.2 工具分类</h2>
+  <div class="tool-grid">
+    <div class="tool-card"><div class="tool-card-name">FileReadTool</div><div class="tool-card-desc">读取文件，支持文本/图片/PDF/Jupyter</div></div>
+    <div class="tool-card"><div class="tool-card-name">FileWriteTool</div><div class="tool-card-desc">创建或覆盖文件</div></div>
+    <div class="tool-card"><div class="tool-card-name">FileEditTool</div><div class="tool-card-desc">精确字符串替换，保留行尾符</div></div>
+    <div class="tool-card"><div class="tool-card-name">GlobTool</div><div class="tool-card-desc">文件模式匹配搜索</div></div>
+    <div class="tool-card"><div class="tool-card-name">GrepTool</div><div class="tool-card-desc">基于 ripgrep 的内容搜索</div></div>
+    <div class="tool-card"><div class="tool-card-name">BashTool</div><div class="tool-card-desc">Shell 命令执行，支持后台运行</div></div>
+    <div class="tool-card"><div class="tool-card-name">REPLTool</div><div class="tool-card-desc">有状态交互式执行环境</div></div>
+    <div class="tool-card"><div class="tool-card-name">WebFetchTool</div><div class="tool-card-desc">网页内容获取，HTML→Markdown</div></div>
+    <div class="tool-card"><div class="tool-card-name">WebSearchTool</div><div class="tool-card-desc">网络搜索</div></div>
+    <div class="tool-card"><div class="tool-card-name">AgentTool</div><div class="tool-card-desc">子 Agent 派发，支持并行执行</div></div>
+    <div class="tool-card"><div class="tool-card-name">SkillTool</div><div class="tool-card-desc">预定义工作流技能调用</div></div>
+    <div class="tool-card"><div class="tool-card-name">TodoWriteTool</div><div class="tool-card-desc">任务列表管理</div></div>
+  </div>
+
+  <h2>4.3 FileEditTool 关键实现细节</h2>
+  <div class="permission-flow">
+    <div class="pf-row"><div class="pf-label">修改时间检查</div><div class="pf-note">防止并发修改冲突</div></div>
+    <div class="pf-row"><div class="pf-label">相似文件建议</div><div class="pf-note">文件不存在时搜索相似文件名</div></div>
+    <div class="pf-row"><div class="pf-label">行尾符保留</div><div class="pf-note">检测并保留原文件 CRLF/LF</div></div>
+    <div class="pf-row"><div class="pf-label">Git Diff 生成</div><div class="pf-note">编辑后生成 diff 用于 UI 展示</div></div>
+    <div class="pf-row"><div class="pf-label">LSP 通知</div><div class="pf-note">通知语言服务器文件已更新</div></div>
+  </div>
+
+  <h2>4.4 结果大小控制</h2>
+  <div class="callout">当工具返回内容超过 <code>maxResultSizeChars</code> 时，系统自动将完整内容写入临时文件，在消息中替换为文件路径引用。AI 可通过 FileReadTool 读取完整内容，防止撑爆上下文窗口。</div>
+
+  <h2>4.5 MCP 工具集成</h2>
+  <div class="card">
+    <div class="card-title">MCP 工具命名规则</div>
+    <pre><code><span class="cm">// 内置工具：Bash、Read、Write</span>
+<span class="cm">// MCP 工具：mcp__serverName__toolName</span>
+mcp__slack__send_message
+mcp__github__create_pr
+mcp__postgres__query</code></pre>
+  </div>
+</div>
+
+<!-- Section 4: Ch05 Permissions -->
+<div class="section" id="s4">
+  <h1>第 5 章：权限系统</h1>
+  <p class="subtitle">六种权限模式 · 规则系统 · AI 分类器 · 拒绝追踪</p>
+
+  <h2>5.1 六种权限模式</h2>
+  <div class="layer-stack">
+    <div class="layer l3" onclick="this.classList.toggle('open')">
+      <div class="layer-name">default — 标准模式</div>
+      <div class="layer-file">遇到未知操作询问用户</div>
+      <div class="layer-detail">日常开发推荐模式。每次遇到未明确授权的操作，显示权限对话框让用户决定。</div>
+    </div>
+    <div class="layer l4" onclick="this.classList.toggle('open')">
+      <div class="layer-name">plan — 计划模式 ⏸</div>
+      <div class="layer-file">只允许只读操作，写操作需要用户确认</div>
+      <div class="layer-detail">适合复杂任务规划阶段。AI 可以读取代码、分析问题，但不能修改文件或执行命令。</div>
+    </div>
+    <div class="layer l3" onclick="this.classList.toggle('open')">
+      <div class="layer-name">acceptEdits — 自动接受编辑 ⏵⏵</div>
+      <div class="layer-file">自动接受工作目录内的文件编辑</div>
+      <div class="layer-detail">快速迭代时使用。文件编辑自动允许，但 Bash 命令等仍需确认。</div>
+    </div>
+    <div class="layer l1" onclick="this.classList.toggle('open')">
+      <div class="layer-name">bypassPermissions — 跳过所有权限 ⏵⏵</div>
+      <div class="layer-file" style="color:#f87171;">危险！跳过所有权限检查</div>
+      <div class="layer-detail">CI/CD 自动化场景使用。注意：Deny 和 Ask 规则仍然生效，无法被绕过。</div>
+    </div>
+    <div class="layer l2" onclick="this.classList.toggle('open')">
+      <div class="layer-name">dontAsk — 不询问模式</div>
+      <div class="layer-file">遇到需要询问的操作直接拒绝</div>
+      <div class="layer-detail">代码审查（只读）场景。遇到写操作直接拒绝，不打扰用户。</div>
+    </div>
+    <div class="layer l5" onclick="this.classList.toggle('open')">
+      <div class="layer-name">auto — 自动模式（内部）</div>
+      <div class="layer-file">用 AI 分类器自动判断是否安全</div>
+      <div class="layer-detail">Anthropic 内部使用。AI 分类器与用户对话框竞速，分类器先出结果则自动处理。</div>
+    </div>
+  </div>
+
+  <h2>5.2 权限检查流程</h2>
+  <div class="permission-flow">
+    <div class="pf-row"><span style="color:#f87171;font-weight:700;">[1]</span><div class="pf-label">命中 Deny 规则？</div><div class="pf-note">直接拒绝，bypassPermissions 也无法绕过</div></div>
+    <div class="pf-arrow" style="text-align:center;color:#4b5563;">↓</div>
+    <div class="pf-row"><span style="color:#fbbf24;font-weight:700;">[2]</span><div class="pf-label">命中 Ask 规则？</div><div class="pf-note">强制询问，bypassPermissions 也无法绕过</div></div>
+    <div class="pf-arrow" style="text-align:center;color:#4b5563;">↓</div>
+    <div class="pf-row"><span style="color:#93c5fd;font-weight:700;">[3]</span><div class="pf-label">工具自检 checkPermissions()</div><div class="pf-note">工具特定的权限逻辑</div></div>
+    <div class="pf-arrow" style="text-align:center;color:#4b5563;">↓</div>
+    <div class="pf-row"><span style="color:#6ee7b7;font-weight:700;">[4]</span><div class="pf-label">bypassPermissions 模式？</div><div class="pf-note">是 → 直接允许</div></div>
+    <div class="pf-arrow" style="text-align:center;color:#4b5563;">↓</div>
+    <div class="pf-row"><span style="color:#6ee7b7;font-weight:700;">[5]</span><div class="pf-label">命中 Allow 规则？</div><div class="pf-note">是 → 直接允许</div></div>
+    <div class="pf-arrow" style="text-align:center;color:#4b5563;">↓</div>
+    <div class="pf-row"><span style="color:#c084fc;font-weight:700;">[6]</span><div class="pf-label">默认：询问用户 / AI 分类器</div><div class="pf-note">显示权限对话框</div></div>
+  </div>
+
+  <h2>5.3 拒绝次数追踪</h2>
+  <div class="card">
+    <div class="card-title">src/utils/permissions/denialTracking.ts</div>
+    <pre><code><span class="kw">const</span> DENIAL_LIMITS = {
+  maxConsecutive: <span class="st">3</span>,   <span class="cm">// 连续拒绝 3 次 → 降级为询问用户</span>
+  maxTotal: <span class="st">20</span>,        <span class="cm">// 总共拒绝 20 次 → 降级为询问用户</span>
+};</code></pre>
+  </div>
+  <div class="callout"><strong>设计意图：</strong>防止 AI 分类器过于保守导致用户体验变差。当分类器连续拒绝 3 次或总共拒绝 20 次后，系统降级为询问用户。</div>
+</div>
+<!-- Section 5: Ch06 Auth -->
+<div class="section" id="s5">
+  <h1>第 6 章：认证与凭证管理</h1>
+  <p class="subtitle">OAuth 2.0 + PKCE · macOS Keychain · 多云平台认证</p>
+
+  <h2>6.1 认证优先级</h2>
+  <div class="permission-flow">
+    <div class="pf-row"><span class="tag tag-purple">最高</span><div class="pf-label">文件描述符传入（FD）</div><div class="pf-note">SDK 程序化调用</div></div>
+    <div class="pf-row"><span class="tag tag-blue">2</span><div class="pf-label">环境变量 ANTHROPIC_API_KEY</div><div class="pf-note">直接设置 API Key</div></div>
+    <div class="pf-row"><span class="tag tag-green">3</span><div class="pf-label">OAuth Token（claude.ai 账户）</div><div class="pf-note">通过 claude login 获取</div></div>
+    <div class="pf-row"><span class="tag tag-yellow">4</span><div class="pf-label">macOS Keychain 存储的 API Key</div><div class="pf-note">安全本地存储</div></div>
+    <div class="pf-row"><span class="tag tag-red">5/6</span><div class="pf-label">AWS Bedrock / Google Cloud Vertex AI</div><div class="pf-note">企业云平台凭证</div></div>
+  </div>
+
+  <h2>6.2 OAuth 2.0 + PKCE 流程</h2>
+  <div class="flow">
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot"></div><div class="flow-connector"></div></div>
+      <div class="flow-content"><div class="flow-label">生成 PKCE 参数</div><div class="flow-desc">code_verifier = 随机 32 字节；code_challenge = SHA256(verifier)</div></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot" style="background:#34d399"></div><div class="flow-connector"></div></div>
+      <div class="flow-content"><div class="flow-label">构建授权 URL 并打开浏览器</div><div class="flow-desc">本地启动 HTTP 服务器监听回调</div></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot" style="background:#fbbf24"></div><div class="flow-connector"></div></div>
+      <div class="flow-content"><div class="flow-label">用户在 claude.ai 登录</div><div class="flow-desc">重定向到 localhost:{port}/callback?code={auth_code}</div></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot" style="background:#c084fc"></div></div>
+      <div class="flow-content"><div class="flow-label">用 auth_code + code_verifier 换取 access_token</div><div class="flow-desc">保存 access_token + refresh_token 到 macOS Keychain</div></div>
+    </div>
+  </div>
+
+  <h2>6.3 Keychain 预取优化</h2>
+  <div class="callout">启动时立即触发 <code>startKeychainPrefetch()</code>，与模块加载并行预取两个 Keychain 条目（OAuth Token + Legacy API Key），节省约 65ms 启动时间。</div>
+
+  <h2>6.4 Token 自动刷新</h2>
+  <div class="card">
+    <div class="card-title">提前 5 分钟刷新，避免边界情况</div>
+    <pre><code><span class="kw">function</span> isOAuthTokenExpired(tokens): <span class="ty">boolean</span> {
+  <span class="cm">// 提前 5 分钟刷新</span>
+  <span class="kw">return</span> Date.now() > tokens.expires_at - <span class="st">5 * 60 * 1000</span>;
+}</code></pre>
+  </div>
+</div>
+
+<!-- Section 6: Ch07 Ink Renderer -->
+<div class="section" id="s6">
+  <h1>第 7 章：终端渲染引擎（Ink）</h1>
+  <p class="subtitle">React → 终端管道 · Yoga 布局 · Screen Buffer · 键盘输入</p>
+
+  <h2>7.1 渲染管道</h2>
+  <div class="flow">
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot"></div><div class="flow-connector"></div></div>
+      <div class="flow-content"><div class="flow-label">React 组件树</div><div class="flow-desc">开发者用熟悉的 React 模式编写 UI</div></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot" style="background:#34d399"></div><div class="flow-connector"></div></div>
+      <div class="flow-content"><div class="flow-label">自定义 React Reconciler</div><div class="flow-desc">src/ink/reconciler.ts — 将 React 虚拟 DOM 映射到 ink 节点</div></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot" style="background:#fbbf24"></div><div class="flow-connector"></div></div>
+      <div class="flow-content"><div class="flow-label">Yoga 布局引擎</div><div class="flow-desc">Facebook 的 Flexbox 实现，计算终端布局</div></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot" style="background:#c084fc"></div><div class="flow-connector"></div></div>
+      <div class="flow-content"><div class="flow-label">Screen Buffer（字符网格）</div><div class="flow-desc">二维字符数组，支持中文宽字符（占 2 格）</div></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-line"><div class="flow-dot" style="background:#f87171"></div></div>
+      <div class="flow-content"><div class="flow-label">ANSI 转义码输出</div><div class="flow-desc">每次渲染约 1-3ms（Yoga 布局 + 绘制）</div></div>
+    </div>
+  </div>
+
+  <h2>7.2 对象池优化</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">CharPool — 字符池</div>
+      <p style="font-size:13px;color:#9ca3af;">复用相同字符的对象，减少 GC 压力。相同字符只存储一份，通过 ID 引用。</p>
+    </div>
+    <div class="card">
+      <div class="card-title">StylePool — 样式池</div>
+      <p style="font-size:13px;color:#9ca3af;">复用相同样式（颜色、粗体等）的对象。跨调用共享渲染资源。</p>
+    </div>
+  </div>
+
+  <h2>7.3 键盘输入解析</h2>
+  <div class="card">
+    <div class="card-title">终端原始字节 → 按键事件</div>
+    <pre><code><span class="cm">// 方向键上 = ESC [ A = [0x1B, 0x5B, 0x41]</span>
+<span class="kw">if</span> (str === <span class="st">'\x1B[A'</span>) <span class="kw">return</span> { key: <span class="st">'upArrow'</span> };
+<span class="kw">if</span> (str === <span class="st">'\x03'</span>) <span class="kw">return</span> { key: <span class="st">'c'</span>, ctrl: <span class="kw">true</span> };  <span class="cm">// Ctrl+C</span>
+<span class="kw">if</span> (str === <span class="st">'\x04'</span>) <span class="kw">return</span> { key: <span class="st">'d'</span>, ctrl: <span class="kw">true</span> };  <span class="cm">// Ctrl+D</span></code></pre>
+  </div>
+</div>
+<!-- Section 7: Ch08 Components -->
+<div class="section" id="s7">
+  <h1>第 8 章：UI 组件系统</h1>
+  <p class="subtitle">原子设计 · REPL.tsx · PromptInput · Vim 模式 · 主题系统</p>
+
+  <h2>8.1 原子设计层次</h2>
+  <div class="layer-stack">
+    <div class="layer l1" onclick="this.classList.toggle('open')">
+      <div class="layer-name">Atoms（原子）</div>
+      <div class="layer-file">ink/ 基础组件：Text, Box, Spinner</div>
+      <div class="layer-detail">最小的不可分割组件，直接映射到终端输出原语。</div>
+    </div>
+    <div class="layer l2" onclick="this.classList.toggle('open')">
+      <div class="layer-name">Molecules（分子）</div>
+      <div class="layer-file">components/ 复合组件：Message, StatusLine</div>
+      <div class="layer-detail">由多个原子组合而成，具有特定功能的组件。</div>
+    </div>
+    <div class="layer l3" onclick="this.classList.toggle('open')">
+      <div class="layer-name">Organisms（有机体）</div>
+      <div class="layer-file">components/ 功能组件：PromptInput, MessageList</div>
+      <div class="layer-detail">复杂的功能性组件，包含业务逻辑和状态管理。</div>
+    </div>
+    <div class="layer l4" onclick="this.classList.toggle('open')">
+      <div class="layer-name">Pages（页面）</div>
+      <div class="layer-file">screens/ 完整页面：REPL（895KB）, Doctor</div>
+      <div class="layer-detail">完整的页面级组件，REPL.tsx 是主界面，895KB 体积反映了其复杂度。</div>
+    </div>
+  </div>
+
+  <h2>8.2 PromptInput 功能</h2>
+  <div class="tool-grid">
+    <div class="tool-card"><div class="tool-card-name">多行输入</div><div class="tool-card-desc">Shift+Enter 换行</div></div>
+    <div class="tool-card"><div class="tool-card-name">历史记录</div><div class="tool-card-desc">上下箭头浏览历史</div></div>
+    <div class="tool-card"><div class="tool-card-name">自动补全</div><div class="tool-card-desc">Tab 键触发</div></div>
+    <div class="tool-card"><div class="tool-card-name">Vim 模式</div><div class="tool-card-desc">可选的 Vim 编辑模式</div></div>
+    <div class="tool-card"><div class="tool-card-name">粘贴检测</div><div class="tool-card-desc">大段文本自动处理</div></div>
+    <div class="tool-card"><div class="tool-card-name">图片粘贴</div><div class="tool-card-desc">支持图片直接粘贴</div></div>
+  </div>
+
+  <h2>8.3 Vim 模式</h2>
+  <div class="card">
+    <div class="card-title">src/vim/ — 完整 Vim 状态机</div>
+    <pre><code><span class="kw">type</span> <span class="ty">VimMode</span> = <span class="st">'normal'</span> | <span class="st">'insert'</span> | <span class="st">'visual'</span> | <span class="st">'command'</span>
+
+<span class="cm">// 支持的操作：</span>
+<span class="cm">// 移动：h/j/k/l, w/b/e, 0/$/^, gg/G</span>
+<span class="cm">// 编辑：i/a/o/O, x/X, d/c/y/p</span>
+<span class="cm">// 文本对象：iw/aw, i"/a", i(/a(</span>
+<span class="cm">// 命令：:w, :q, /search, n/N</span></code></pre>
+  </div>
+
+  <h2>8.4 消息渲染类型</h2>
+  <table>
+    <tr><th>消息类型</th><th>渲染组件</th></tr>
+    <tr><td><code>user</code></td><td>UserMessage</td></tr>
+    <tr><td><code>assistant</code></td><td>AssistantMessage（Markdown 渲染）</td></tr>
+    <tr><td><code>tool_use</code></td><td>ToolUseMessage</td></tr>
+    <tr><td><code>tool_result</code></td><td>ToolResultMessage</td></tr>
+    <tr><td><code>error</code></td><td>ErrorMessage</td></tr>
+  </table>
+</div>
+
+<!-- Section 8: Ch09 MCP -->
+<div class="section" id="s8">
+  <h1>第 9 章：MCP（Model Context Protocol）集成</h1>
+  <p class="subtitle">协议概述 · 四种连接类型 · 工具发现 · 错误处理</p>
+
+  <h2>9.1 MCP 是什么</h2>
+  <div class="callout"><strong>类比：MCP 就像 USB 接口</strong>——不管什么设备，只要有 USB 口就能插上用。没有 MCP，Claude Code 只有 45 个内置工具；有了 MCP，任何服务（Slack、GitHub、数据库）只要实现协议，Claude 就能直接调用。</div>
+
+  <h2>9.2 四种连接类型</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">本地进程（stdio）</div>
+      <pre><code>{ <span class="st">"type"</span>: <span class="st">"stdio"</span>,
+  <span class="st">"command"</span>: <span class="st">"python"</span>,
+  <span class="st">"args"</span>: [<span class="st">"-m"</span>, <span class="st">"my_mcp_server"</span>] }</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title">远程 HTTP / SSE / WebSocket</div>
+      <pre><code>{ <span class="st">"type"</span>: <span class="st">"http"</span>,
+  <span class="st">"url"</span>: <span class="st">"https://api.example.com/mcp"</span> }
+{ <span class="st">"type"</span>: <span class="st">"sse"</span>, ... }
+{ <span class="st">"type"</span>: <span class="st">"ws"</span>, ... }</code></pre>
+    </div>
+  </div>
+
+  <h2>9.3 工具发现流程</h2>
+  <div class="flow">
+    <div class="flow-step"><div class="flow-line"><div class="flow-dot"></div><div class="flow-connector"></div></div><div class="flow-content"><div class="flow-label">加载所有 MCP 配置</div><div class="flow-desc">去重（手动配置优先于插件配置）</div></div></div>
+    <div class="flow-step"><div class="flow-line"><div class="flow-dot" style="background:#34d399"></div><div class="flow-connector"></div></div><div class="flow-content"><div class="flow-label">连接每个 MCP 服务器</div><div class="flow-desc">调用 tools/list 获取工具列表</div></div></div>
+    <div class="flow-step"><div class="flow-line"><div class="flow-dot" style="background:#fbbf24"></div></div><div class="flow-content"><div class="flow-label">包装为 MCPTool</div><div class="flow-desc">加上 mcp__serverName__ 前缀，缓存到内存</div></div></div>
+  </div>
+
+  <h2>9.4 错误处理与自动重连</h2>
+  <table>
+    <tr><th>错误类型</th><th>处理方式</th></tr>
+    <tr><td>401 认证失败</td><td>提示用户重新登录</td></tr>
+    <tr><td>404 会话过期</td><td>清除缓存，下次调用时重建连接</td></tr>
+    <tr><td>网络断开</td><td>指数退避重连（1s → 2s → 4s…最多 30s）</td></tr>
+    <tr><td>超时</td><td>最多重试 3 次</td></tr>
+  </table>
+</div>
+<!-- Section 9: Ch10 Bridge -->
+<div class="section" id="s9">
+  <h1>第 10 章：VS Code Bridge</h1>
+  <p class="subtitle">Bridge 架构 · 会话管理 · 消息协议 · JWT 刷新</p>
+
+  <h2>10.1 Bridge 架构</h2>
+  <div class="card">
+    <div class="card-title">集成架构图</div>
+    <pre><code>VS Code 扩展
+    │ WebSocket / HTTP
+    ▼
+Bridge 服务器（本地机器）
+    ├─ bridgeMain.ts    <span class="cm">← 主协调器（115KB）</span>
+    ├─ replBridge.ts    <span class="cm">← REPL 会话管理（100KB）</span>
+    └─ bridgeApi.ts     <span class="cm">← API 客户端</span>
+    │
+    ▼
+Claude Code REPL 实例</code></pre>
+  </div>
+
+  <h2>10.2 Bridge 启动流程</h2>
+  <div class="permission-flow">
+    <div class="pf-row"><div class="pf-label">向 Anthropic 服务器注册</div><div class="pf-note">获取 Bridge ID</div></div>
+    <div class="pf-row"><div class="pf-label">开始轮询新的会话请求</div><div class="pf-note">长轮询或 WebSocket</div></div>
+    <div class="pf-row"><div class="pf-label">为每个请求创建独立 REPL 实例</div><div class="pf-note">进程级隔离</div></div>
+    <div class="pf-row"><div class="pf-label">通过 WebSocket 双向传递消息</div><div class="pf-note">JSON-RPC 风格协议</div></div>
+  </div>
+
+  <h2>10.3 消息协议</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">IDE → Claude Code</div>
+      <pre><code>{ type: <span class="st">'user_message'</span>,
+  content: <span class="st">'帮我重构这个函数'</span>,
+  context: {
+    selectedText: <span class="st">'...'</span>,
+    filePath: <span class="st">'/src/utils.ts'</span>,
+    cursorPosition: { line: 42 }
+  }}</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title">Claude Code → IDE</div>
+      <pre><code>{ type: <span class="st">'assistant_message'</span>,
+  content: <span class="st">'我来分析这个函数...'</span>,
+  toolUse: {
+    name: <span class="st">'FileRead'</span>,
+    input: { file_path: <span class="st">'/src/utils.ts'</span> }
+  }}</code></pre>
+    </div>
+  </div>
+
+  <h2>10.4 JWT Token 刷新</h2>
+  <div class="callout">Bridge 使用 JWT Token 认证，在 Token 过期前 <strong>5 分钟</strong>自动刷新，确保长时间会话不中断。</div>
+</div>
+
+<!-- Section 10: Ch11 API -->
+<div class="section" id="s10">
+  <h1>第 11 章：Claude API 集成</h1>
+  <p class="subtitle">多云平台 · 流式响应 · Prompt 缓存 · 重试逻辑 · 成本追踪</p>
+
+  <h2>11.1 多云平台支持</h2>
+  <div class="card">
+    <div class="card-title">根据模型名自动选择 SDK</div>
+    <pre><code><span class="kw">const</span> client = provider === <span class="st">'bedrock'</span>
+  ? <span class="kw">new</span> <span class="ty">AnthropicBedrock</span>({ ... })
+  : provider === <span class="st">'vertex'</span>
+    ? <span class="kw">new</span> <span class="ty">AnthropicVertex</span>({ ... })
+    : <span class="kw">new</span> <span class="ty">Anthropic</span>({ apiKey: getApiKey() });</code></pre>
+  </div>
+
+  <h2>11.2 流式响应处理</h2>
+  <div class="callout"><strong>关键设计：</strong>工具调用参数通过 <code>input_json_delta</code> 事件增量累积，当 <code>content_block_stop</code> 触发时参数才完整，此时立即加入执行队列。</div>
+  <table>
+    <tr><th>事件类型</th><th>处理逻辑</th></tr>
+    <tr><td><code>content_block_start</code></td><td>新内容块开始，准备工具调用</td></tr>
+    <tr><td><code>content_block_delta</code></td><td>文本增量实时显示；JSON 参数增量累积</td></tr>
+    <tr><td><code>content_block_stop</code></td><td>工具参数完整，加入执行队列</td></tr>
+    <tr><td><code>message_stop</code></td><td>整个响应结束</td></tr>
+  </table>
+
+  <h2>11.3 Prompt 缓存</h2>
+  <div class="card">
+    <div class="card-title">系统提示最后一块标记为可缓存</div>
+    <pre><code><span class="cm">// 减少重复内容的 Token 消耗</span>
+{ type: <span class="st">'text'</span>, text: systemPromptPart,
+  cache_control: { type: <span class="st">'ephemeral'</span> } }</code></pre>
+  </div>
+
+  <h2>11.4 重试策略</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">可重试错误</div>
+      <div style="display:flex;flex-direction:column;gap:4px;font-size:12px;margin-top:8px;">
+        <span class="tag tag-yellow">overloaded_error</span>
+        <span class="tag tag-yellow">api_error</span>
+        <span class="tag tag-yellow">timeout</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">指数退避</div>
+      <p style="font-size:13px;color:#9ca3af;margin-top:8px;">最多重试 3 次<br>等待时间：1s → 2s → 4s</p>
+    </div>
+  </div>
+</div>
+<!-- Section 11: Ch12 Multi-Agent -->
+<div class="section" id="s11">
+  <h1>第 12 章：多 Agent 协调</h1>
+  <p class="subtitle">AgentTool · 内置 Agent 类型 · 上下文隔离 · Coordinator 模式</p>
+
+  <h2>12.1 多 Agent 模式</h2>
+  <div class="layer-stack">
+    <div class="layer l3" onclick="this.classList.toggle('open')">
+      <div class="layer-name">单 Agent 模式（默认）</div>
+      <div class="layer-file">主 Agent → 工具调用 → 结果</div>
+      <div class="layer-detail">标准模式，主 Agent 直接调用工具完成任务。</div>
+    </div>
+    <div class="layer l4" onclick="this.classList.toggle('open')">
+      <div class="layer-name">子 Agent 模式（AgentTool）</div>
+      <div class="layer-file">主 Agent → AgentTool → 多个子 Agent（可并行）</div>
+      <div class="layer-detail">主 Agent 将复杂任务分解，派发给专门的子 Agent 并行处理。子 Agent 有独立的工具集和上下文。</div>
+    </div>
+    <div class="layer l5" onclick="this.classList.toggle('open')">
+      <div class="layer-name">Coordinator 模式（企业内部）</div>
+      <div class="layer-file">Coordinator → 任务分发 → Worker Agent 团队</div>
+      <div class="layer-detail">通过 CLAUDE_CODE_COORDINATOR_MODE 环境变量启用。Coordinator 使用专用工具（TeamCreate、SendMessage）管理 Worker 团队。</div>
+    </div>
+  </div>
+
+  <h2>12.2 内置 Agent 类型</h2>
+  <div class="tool-grid">
+    <div class="tool-card"><div class="tool-card-name">general-purpose</div><div class="tool-card-desc">通用 Agent，拥有全部工具，适合复杂多步骤任务</div></div>
+    <div class="tool-card"><div class="tool-card-name">Explore</div><div class="tool-card-desc">代码库探索专家，工具集：Read/Glob/Grep/Bash</div></div>
+    <div class="tool-card"><div class="tool-card-name">Plan</div><div class="tool-card-desc">实现规划专家，只读工具，设计技术方案</div></div>
+    <div class="tool-card"><div class="tool-card-name">claude-code-guide</div><div class="tool-card-desc">Claude Code 使用指南，Web 工具</div></div>
+  </div>
+
+  <h2>12.3 子 Agent 上下文隔离</h2>
+  <div class="permission-flow">
+    <div class="pf-row"><div class="pf-label">独立 agentId</div><div class="pf-note">每个子 Agent 有唯一 ID</div></div>
+    <div class="pf-row"><div class="pf-label">setAppState 是 no-op</div><div class="pf-note">子 Agent 不能修改主线程 UI 状态</div></div>
+    <div class="pf-row"><div class="pf-label">独立文件缓存</div><div class="pf-note">cloneFileStateCache() 隔离文件读取状态</div></div>
+    <div class="pf-row"><div class="pf-label">内存快照</div><div class="pf-note">完成后保存快照，支持后续恢复</div></div>
+  </div>
+
+  <h2>12.4 Agent 颜色管理</h2>
+  <div class="callout">不同 Agent 在 UI 中显示不同颜色（blue/green/yellow/magenta/cyan/red），基于 agentId 哈希确定，保证同一 Agent 颜色一致。</div>
+</div>
+
+<!-- Section 12: Ch13 Memory -->
+<div class="section" id="s12">
+  <h1>第 13 章：内存系统</h1>
+  <p class="subtitle">七层记忆架构 · CLAUDE.md · Auto Memory · 会话记忆</p>
+
+  <h2>13.1 七层记忆架构</h2>
+  <div class="mem-layer">
+    <div class="mem-layer-num" style="background:#2d1b4e;color:#c084fc;">Layer 1</div>
+    <div class="mem-layer-body">
+      <div class="mem-layer-title">Managed Memory（托管记忆）</div>
+      <div class="mem-layer-desc">企业管理员配置，最高优先级</div>
+      <div class="mem-layer-path">/etc/claude-code/CLAUDE.md</div>
+    </div>
+  </div>
+  <div class="mem-layer">
+    <div class="mem-layer-num" style="background:#1e3a5f;color:#93c5fd;">Layer 2</div>
+    <div class="mem-layer-body">
+      <div class="mem-layer-title">User Memory（用户记忆）</div>
+      <div class="mem-layer-desc">用户全局配置</div>
+      <div class="mem-layer-path">~/.claude/CLAUDE.md</div>
+    </div>
+  </div>
+  <div class="mem-layer">
+    <div class="mem-layer-num" style="background:#1a3a2a;color:#6ee7b7;">Layer 3</div>
+    <div class="mem-layer-body">
+      <div class="mem-layer-title">Project Memory（项目记忆）</div>
+      <div class="mem-layer-desc">从 CWD 向上遍历，越近优先级越高</div>
+      <div class="mem-layer-path">&lt;project&gt;/CLAUDE.md</div>
+    </div>
+  </div>
+  <div class="mem-layer">
+    <div class="mem-layer-num" style="background:#3a2a10;color:#fcd34d;">Layer 4</div>
+    <div class="mem-layer-body">
+      <div class="mem-layer-title">Local Memory（本地记忆）</div>
+      <div class="mem-layer-desc">不提交 git 的本地覆盖</div>
+      <div class="mem-layer-path">&lt;project&gt;/CLAUDE.local.md</div>
+    </div>
+  </div>
+  <div class="mem-layer">
+    <div class="mem-layer-num" style="background:#1e3a5f;color:#93c5fd;">Layer 5</div>
+    <div class="mem-layer-body">
+      <div class="mem-layer-title">Auto Memory（自动记忆）</div>
+      <div class="mem-layer-desc">跨会话持久化，四类：user/feedback/project/reference</div>
+      <div class="mem-layer-path">~/.claude/projects/&lt;slug&gt;/memory/</div>
+    </div>
+  </div>
+  <div class="mem-layer">
+    <div class="mem-layer-num" style="background:#1a3a2a;color:#6ee7b7;">Layer 6</div>
+    <div class="mem-layer-body">
+      <div class="mem-layer-title">Team Memory（团队记忆）</div>
+      <div class="mem-layer-desc">团队共享的记忆</div>
+      <div class="mem-layer-path">~/.claude/projects/&lt;slug&gt;/memory/team/</div>
+    </div>
+  </div>
+  <div class="mem-layer">
+    <div class="mem-layer-num" style="background:#3a1a1a;color:#fca5a5;">Layer 7</div>
+    <div class="mem-layer-body">
+      <div class="mem-layer-title">Session Memory（会话记忆）</div>
+      <div class="mem-layer-desc">会话内自动提取，非阻塞后台执行</div>
+      <div class="mem-layer-path">~/.claude/projects/&lt;slug&gt;/memory/session-&lt;id&gt;.md</div>
+    </div>
+  </div>
+
+  <h2>13.2 Auto Memory 四类记忆</h2>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0;">
+    <div style="flex:1;min-width:140px;padding:14px;border-radius:8px;background:#1e3a5f22;border:1px solid #2563eb44;">
+      <div style="font-size:12px;font-weight:700;color:#93c5fd;margin-bottom:4px;">user</div>
+      <div style="font-size:11px;color:#6b7280;">用户角色、偏好、知识背景</div>
+    </div>
+    <div style="flex:1;min-width:140px;padding:14px;border-radius:8px;background:#2d1b4e22;border:1px solid #7c3aed44;">
+      <div style="font-size:12px;font-weight:700;color:#c084fc;margin-bottom:4px;">feedback</div>
+      <div style="font-size:11px;color:#6b7280;">用户对 AI 行为的纠正与确认</div>
+    </div>
+    <div style="flex:1;min-width:140px;padding:14px;border-radius:8px;background:#1a3a2a22;border:1px solid #16a34a44;">
+      <div style="font-size:12px;font-weight:700;color:#6ee7b7;margin-bottom:4px;">project</div>
+      <div style="font-size:11px;color:#6b7280;">项目目标、决策、里程碑</div>
+    </div>
+    <div style="flex:1;min-width:140px;padding:14px;border-radius:8px;background:#3a2a1022;border:1px solid #d9770644;">
+      <div style="font-size:12px;font-weight:700;color:#fcd34d;margin-bottom:4px;">reference</div>
+      <div style="font-size:11px;color:#6b7280;">外部系统资源指针</div>
+    </div>
+  </div>
+
+  <h2>13.3 Session Memory 触发条件</h2>
+  <table>
+    <tr><th>阈值</th><th>值</th><th>说明</th></tr>
+    <tr><td>minimumMessageTokensToInit</td><td>2000</td><td>首次提取的最低 token 数</td></tr>
+    <tr><td>minimumTokensBetweenUpdate</td><td>1000</td><td>两次提取间的最低 token 增量</td></tr>
+    <tr><td>toolCallsBetweenUpdates</td><td>10</td><td>工具调用次数阈值</td></tr>
+  </table>
+</div>
+<!-- Section 13: Ch14 Sessions -->
+<div class="section" id="s13">
+  <h1>第 14 章：会话管理</h1>
+  <p class="subtitle">会话生命周期 · JSONL 持久化 · 并发会话 · Worktree 隔离</p>
+
+  <h2>14.1 会话生命周期</h2>
+  <div class="flow">
+    <div class="flow-step"><div class="flow-line"><div class="flow-dot"></div><div class="flow-connector"></div></div><div class="flow-content"><div class="flow-label">会话创建</div><div class="flow-desc">生成唯一 SessionId（UUID），初始化消息历史，注册并发会话</div></div></div>
+    <div class="flow-step"><div class="flow-line"><div class="flow-dot" style="background:#34d399"></div><div class="flow-connector"></div></div><div class="flow-content"><div class="flow-label">会话运行</div><div class="flow-desc">处理用户消息，执行工具调用，持久化对话记录（JSONL 格式）</div></div></div>
+    <div class="flow-step"><div class="flow-line"><div class="flow-dot" style="background:#f87171"></div></div><div class="flow-content"><div class="flow-label">会话结束</div><div class="flow-desc">刷新会话存储，清理临时文件，注销并发会话</div></div></div>
+  </div>
+
+  <h2>14.2 JSONL 持久化</h2>
+  <div class="card">
+    <div class="card-title">存储路径与格式</div>
+    <pre><code><span class="cm">// 路径：~/.claude/projects/&lt;sanitized-path&gt;/sessions/&lt;sessionId&gt;.jsonl</span>
+<span class="cm">// 每行一条消息（JSONL 格式，追加写入）</span>
+
+<span class="kw">await</span> fs.appendFile(path, JSON.stringify(message) + <span class="st">'\n'</span>);</code></pre>
+  </div>
+  <div class="callout">JSONL 格式（每行一个 JSON 对象）的优势：追加写入高效，无需加锁；即使写入中断也不会损坏已有数据；可以流式读取大文件。</div>
+
+  <h2>14.3 会话恢复</h2>
+  <p style="font-size:14px;color:#9ca3af;">用户通过 <code>/resume</code> 命令恢复之前的会话。系统读取 JSONL 文件，重建完整的对话历史，继续上次的工作。</p>
+
+  <h2>14.4 Worktree 隔离</h2>
+  <div class="card">
+    <div class="card-title">Git Worktree 隔离不同会话的文件操作</div>
+    <pre><code><span class="cm">// 创建新的 Git Worktree</span>
+<span class="kw">await</span> execa(<span class="st">'git'</span>, [<span class="st">'worktree'</span>, <span class="st">'add'</span>, worktreePath, <span class="st">'-b'</span>, <span class="st">`claude/${name}`</span>]);
+
+<span class="cm">// 切换工作目录</span>
+setCwd(worktreePath);</code></pre>
+  </div>
+</div>
+
+<!-- Section 14: Ch15 Plugins -->
+<div class="section" id="s14">
+  <h1>第 15 章：插件与技能系统</h1>
+  <p class="subtitle">插件架构 · Skill 系统 · Hooks 机制 · 自定义命令</p>
+
+  <h2>15.1 插件类型</h2>
+  <div class="layer-stack">
+    <div class="layer l4" onclick="this.classList.toggle('open')">
+      <div class="layer-name">内置插件（bundled/）</div>
+      <div class="layer-file">随 Claude Code 发布</div>
+      <div class="layer-detail">Anthropic 官方提供的插件，包含在 cli.js 打包文件中。</div>
+    </div>
+    <div class="layer l3" onclick="this.classList.toggle('open')">
+      <div class="layer-name">用户插件</div>
+      <div class="layer-file">~/.claude/plugins/</div>
+      <div class="layer-detail">用户个人安装的插件，对所有项目生效。</div>
+    </div>
+    <div class="layer l2" onclick="this.classList.toggle('open')">
+      <div class="layer-name">项目插件</div>
+      <div class="layer-file">.claude/plugins/</div>
+      <div class="layer-detail">项目级插件，只对当前项目生效，可以提交到 git。</div>
+    </div>
+    <div class="layer l5" onclick="this.classList.toggle('open')">
+      <div class="layer-name">托管插件</div>
+      <div class="layer-file">企业管理员分发</div>
+      <div class="layer-detail">通过 MDM 或企业配置系统分发，用户无法禁用。</div>
+    </div>
+  </div>
+
+  <h2>15.2 Skill 系统</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">内置技能示例</div>
+      <pre><code><span class="cm">// /commit → 触发 commit 技能</span>
+{ name: <span class="st">'commit'</span>,
+  description: <span class="st">'创建 git commit'</span>,
+  prompt: <span class="st">'分析变更，生成规范的 commit 消息...'</span> }
+
+<span class="cm">// /review-pr 123 → 审查 PR</span>
+{ name: <span class="st">'review-pr'</span>,
+  description: <span class="st">'审查 Pull Request'</span>,
+  prompt: <span class="st">'分析 PR 的变更，提供代码审查意见'</span> }</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title">自定义命令格式</div>
+      <pre><code><span class="cm">// .claude/commands/my-command.md</span>
+<span class="cm">// ---</span>
+<span class="cm">// description: 我的自定义命令</span>
+<span class="cm">// ---</span>
+<span class="cm">// 执行以下操作：</span>
+<span class="cm">// 1. 读取当前文件</span>
+<span class="cm">// 2. 分析代码质量</span>
+<span class="cm">// 3. 生成改进建议</span></code></pre>
+    </div>
+  </div>
+
+  <h2>15.3 Hooks 机制</h2>
+  <div class="callout">Hooks 允许在工具执行的各个阶段插入自定义逻辑。例如：在每次文件编辑后自动运行 Prettier 格式化。</div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">Hook 事件类型</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">
+        <span class="tag tag-blue">session_start</span>
+        <span class="tag tag-blue">session_end</span>
+        <span class="tag tag-green">pre_tool_use</span>
+        <span class="tag tag-green">post_tool_use</span>
+        <span class="tag tag-purple">pre_agent_start</span>
+        <span class="tag tag-purple">post_agent_end</span>
+        <span class="tag tag-yellow">pre_compact</span>
+        <span class="tag tag-yellow">post_compact</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Hook 配置示例</div>
+      <pre><code><span class="cm">// settings.json</span>
+{ <span class="st">"hooks"</span>: {
+  <span class="st">"post_tool_use"</span>: [{
+    <span class="st">"matcher"</span>: <span class="st">"FileEdit"</span>,
+    <span class="st">"hooks"</span>: [{
+      <span class="st">"type"</span>: <span class="st">"command"</span>,
+      <span class="st">"command"</span>: <span class="st">"prettier --write $TOOL_INPUT_FILE_PATH"</span>
+    }]
+  }]
+}}</code></pre>
+    </div>
+  </div>
+</div>
+<!-- Section 15: Ch16 Prompt Engineering -->
+<div class="section" id="s15">
+  <h1>第 16 章：提示词工程艺术</h1>
+  <p class="subtitle">系统提示架构 · 片段缓存 · 行为约束模式 · 压缩提示词设计</p>
+
+  <h2>16.1 系统提示整体架构</h2>
+  <div class="card">
+    <div class="card-title">src/constants/prompts.ts — getSystemPrompt() 拼接顺序</div>
+    <pre><code><span class="cm">// ── 静态区域（全局可缓存，所有用户共享）──</span>
+getSimpleIntroSection()       <span class="cm">// 身份与角色定义</span>
+getSimpleSystemSection()      <span class="cm">// 工具执行规则</span>
+getSimpleDoingTasksSection()  <span class="cm">// 任务执行规范</span>
+getActionsSection()           <span class="cm">// 危险操作守则</span>
+getUsingYourToolsSection()    <span class="cm">// 工具使用偏好</span>
+getSimpleToneAndStyleSection() <span class="cm">// 语气与格式</span>
+getOutputEfficiencySection()  <span class="cm">// 输出效率要求</span>
+
+SYSTEM_PROMPT_DYNAMIC_BOUNDARY  <span class="cm">// ← 缓存边界标记</span>
+
+<span class="cm">// ── 动态区域（按会话计算）──</span>
+session_guidance / memory / env_info / language / mcp_instructions</code></pre>
+  </div>
+
+  <h2>16.2 片段缓存系统</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">稳定片段（缓存到 /clear）</div>
+      <pre><code>systemPromptSection(<span class="st">'memory'</span>, () =>
+  loadMemoryPrompt()
+)</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title">易变片段（每轮重新计算）</div>
+      <pre><code>DANGEROUS_uncachedSystemPromptSection(
+  <span class="st">'mcp_instructions'</span>,
+  () => getMcpInstructionsSection(mcpClients),
+  <span class="st">'MCP servers connect/disconnect between turns'</span>
+)</code></pre>
+    </div>
+  </div>
+  <div class="callout"><strong>DANGEROUS_ 前缀</strong>是工程约定，提醒开发者此函数会破坏 Prompt 缓存，使用时必须提供理由字符串。</div>
+
+  <h2>16.3 行为约束的四种表达模式</h2>
+  <div class="permission-flow">
+    <div class="pf-row"><div class="pf-label">正反双约束</div><div class="pf-note">先说"不要做什么"，再说"什么情况下可以做"</div></div>
+    <div class="pf-row"><div class="pf-label">示例锚定</div><div class="pf-note">抽象规则后立即跟具体示例，防止模型理解偏差</div></div>
+    <div class="pf-row"><div class="pf-label">数值锚定（内部用户）</div><div class="pf-note">≤25 词 / ≤100 词，比定性描述更有效</div></div>
+    <div class="pf-row"><div class="pf-label">用户类型分支</div><div class="pf-note">process.env.USER_TYPE === 'ant' 门控，内部先试验</div></div>
+  </div>
+
+  <h2>16.4 工具使用指导</h2>
+  <div class="card">
+    <div class="card-title">工具名常量化 — 防止重命名时遗漏</div>
+    <pre><code><span class="cm">// 不用硬编码字符串，用常量引用</span>
+`To read files use <span class="st">${FILE_READ_TOOL_NAME}</span> instead of cat, head, tail, or sed`
+`To edit files use <span class="st">${FILE_EDIT_TOOL_NAME}</span> instead of sed or awk`
+`Do NOT use the <span class="st">${BASH_TOOL_NAME}</span> to run commands when a relevant dedicated tool is provided.
+ This is <span class="kw">CRITICAL</span> to assisting the user:`</code></pre>
+  </div>
+
+  <h2>16.5 输出风格双轨制</h2>
+  <table>
+    <tr><th>维度</th><th>内部用户（ant）</th><th>外部用户</th></tr>
+    <tr><td>核心目标</td><td>可读性，零心智负担</td><td>简洁，直达要点</td></tr>
+    <tr><td>长度限制</td><td>数值锚定（≤25/≤100 词）</td><td>定性（"brief and direct"）</td></tr>
+    <tr><td>格式要求</td><td>流畅散文，避免碎片化</td><td>无特殊格式要求</td></tr>
+    <tr><td>错误报告</td><td>忠实报告，不掩盖失败</td><td>无特殊要求</td></tr>
+  </table>
+
+  <h2>16.6 压缩提示词的工程设计</h2>
+  <div class="card">
+    <div class="card-title">src/services/compact/prompt.ts — 三明治结构</div>
+    <pre><code><span class="cm">// 开头：强制约束（防止 Sonnet 4.6 自适应思考模式误调工具）</span>
+<span class="kw">const</span> NO_TOOLS_PREAMBLE = <span class="st">`CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+- Tool calls will be REJECTED and will waste your only turn — you will fail the task.`</span>
+
+<span class="cm">// 中间：两阶段输出（&lt;analysis&gt; 草稿区 + &lt;summary&gt; 正式输出）</span>
+<span class="cm">// formatCompactSummary() 最终剥离 &lt;analysis&gt; 块，只保留 &lt;summary&gt;</span>
+
+<span class="cm">// 结尾：重复提醒</span>
+<span class="kw">const</span> NO_TOOLS_TRAILER = <span class="st">`REMINDER: Do NOT call any tools. Tool calls will be rejected.`</span></code></pre>
+  </div>
+
+  <h2>16.7 安全指令独立管理</h2>
+  <div class="callout">
+    <strong>src/constants/cyberRiskInstruction.ts</strong> — 文件头注释明确标注所有者（Safeguards 团队）和修改流程：<br>
+    <code>IMPORTANT: DO NOT MODIFY THIS INSTRUCTION WITHOUT SAFEGUARDS TEAM REVIEW</code><br>
+    安全关键指令独立成文件，防止随意改动。
+  </div>
+
+  <h2>16.8 提示词版本管理规范</h2>
+  <div class="card">
+    <div class="card-title">@[MODEL LAUNCH] 标记体系</div>
+    <pre><code><span class="cm">// @[MODEL LAUNCH]: Update the latest frontier model.</span>
+<span class="kw">const</span> FRONTIER_MODEL_NAME = <span class="st">'Claude Opus 4.6'</span>
+
+<span class="cm">// @[MODEL LAUNCH]: capy v8 thoroughness counterweight (PR #24302)</span>
+<span class="cm">// — un-gate once validated on external via A/B</span>
+<span class="st">`Before reporting a task complete, verify it actually works...`</span>
+
+<span class="cm">// @[MODEL LAUNCH]: False-claims mitigation for Capybara v8</span>
+<span class="cm">// (29-30% FC rate vs v4's 16.7%)</span></code></pre>
+  </div>
+  <div class="callout">注释中包含 PR 编号便于追溯，量化指标（FC rate）说明为何需要此修复，内部代号（capy/Capybara）是模型的内部名称。</div>
+</div>
+
+<!-- Section 16: Ch17 State -->
+<div class="section" id="s16">
+  <h1>第 17 章：状态管理</h1>
+  <p class="subtitle">极简 Store · AppState · React Hooks · 全局状态 vs 应用状态</p>
+
+  <h2>17.1 极简 Store 实现</h2>
+  <div class="card">
+    <div class="card-title">src/state/store.ts — 30 行实现完整状态管理</div>
+    <pre><code><span class="kw">export function</span> <span class="ty">createStore</span>&lt;<span class="ty">T</span>&gt;(initialState: <span class="ty">T</span>): <span class="ty">Store</span>&lt;<span class="ty">T</span>&gt; {
+  <span class="kw">let</span> state = initialState;
+  <span class="kw">const</span> listeners = <span class="kw">new</span> <span class="ty">Set</span>&lt;<span class="ty">Listener</span>&gt;();
+
+  <span class="kw">return</span> {
+    getState: () => state,
+    setState: (updater) => {
+      <span class="kw">const</span> next = updater(state);
+      <span class="kw">if</span> (Object.is(next, state)) <span class="kw">return</span>; <span class="cm">// 引用相等优化</span>
+      state = next;
+      <span class="kw">for</span> (<span class="kw">const</span> listener <span class="kw">of</span> listeners) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      <span class="kw">return</span> () => listeners.delete(listener);
+    },
+  };
+}</code></pre>
+  </div>
+
+  <h2>17.2 两套状态系统对比</h2>
+  <table>
+    <tr><th>特性</th><th>bootstrap/state.ts</th><th>AppStateStore.ts</th></tr>
+    <tr><td>作用域</td><td>全局单例</td><td>React 组件树</td></tr>
+    <tr><td>访问方式</td><td>直接函数调用</td><td>React Context + Hooks</td></tr>
+    <tr><td>持久化</td><td>进程生命周期</td><td>会话生命周期</td></tr>
+    <tr><td>用途</td><td>会话 ID、成本追踪、遥测</td><td>UI 状态、消息列表、权限</td></tr>
+  </table>
+
+  <h2>17.3 AppState 关键字段</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">UI 状态</div>
+      <div style="font-size:12px;color:#9ca3af;line-height:2;">
+        <div><code style="color:#a5f3fc;">messages</code> — 对话消息列表</div>
+        <div><code style="color:#a5f3fc;">statusLineText</code> — 状态栏文本</div>
+        <div><code style="color:#a5f3fc;">inProgressToolUseIDs</code> — 执行中的工具</div>
+        <div><code style="color:#a5f3fc;">tasks</code> — 任务列表</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">配置状态</div>
+      <div style="font-size:12px;color:#9ca3af;line-height:2;">
+        <div><code style="color:#a5f3fc;">toolPermissionContext</code> — 权限上下文</div>
+        <div><code style="color:#a5f3fc;">mainLoopModel</code> — 当前模型</div>
+        <div><code style="color:#a5f3fc;">mcpClients</code> — MCP 连接</div>
+        <div><code style="color:#a5f3fc;">loadedPlugins</code> — 已加载插件</div>
+      </div>
+    </div>
+  </div>
+
+  <h2>17.4 DeepImmutable 类型安全</h2>
+  <div class="callout"><code>AppState</code> 使用 <code>DeepImmutable&lt;T&gt;</code> 类型包装，确保状态对象在 TypeScript 层面是只读的，防止意外直接修改状态（必须通过 setState 更新）。</div>
+</div>
+
+<!-- Section 17: Ch18 Build -->
+<div class="section" id="s17">
+  <h1>第 18 章：构建系统与性能优化</h1>
+  <p class="subtitle">Bun 构建 · 编译时 DCE · 启动优化 · 原生模块</p>
+
+  <h2>18.1 Bun 构建流程</h2>
+  <div class="flow">
+    <div class="flow-step"><div class="flow-line"><div class="flow-dot"></div><div class="flow-connector"></div></div><div class="flow-content"><div class="flow-label">TypeScript 编译</div><div class="flow-desc">类型检查 + 转译</div></div></div>
+    <div class="flow-step"><div class="flow-line"><div class="flow-dot" style="background:#34d399"></div><div class="flow-connector"></div></div><div class="flow-content"><div class="flow-label">模块打包</div><div class="flow-desc">所有依赖内联到单文件</div></div></div>
+    <div class="flow-step"><div class="flow-line"><div class="flow-dot" style="background:#fbbf24"></div><div class="flow-connector"></div></div><div class="flow-content"><div class="flow-label">死代码消除（DCE）</div><div class="flow-desc">feature() 门控的代码在外部构建中完全消除</div></div></div>
+    <div class="flow-step"><div class="flow-line"><div class="flow-dot" style="background:#c084fc"></div></div><div class="flow-content"><div class="flow-label">输出 cli.js（13MB）+ cli.js.map</div><div class="flow-desc">单文件分发，包含所有依赖</div></div></div>
+  </div>
+
+  <h2>18.2 编译时特性开关</h2>
+  <div class="card">
+    <div class="card-title">feature() 函数实现内外部构建差异化</div>
+    <pre><code><span class="cm">// 内部构建：feature('COORDINATOR_MODE') = true</span>
+<span class="cm">// 外部构建：整个 if 块被完全消除</span>
+<span class="kw">const</span> coordinatorModeModule = feature(<span class="st">'COORDINATOR_MODE'</span>)
+  ? require(<span class="st">'./coordinator/coordinatorMode.js'</span>)
+  : <span class="kw">null</span>;</code></pre>
+  </div>
+
+  <h2>18.3 启动性能优化策略</h2>
+  <div class="permission-flow">
+    <div class="pf-row"><div class="pf-label">快速路径</div><div class="pf-note">--version 零模块加载，立即退出</div></div>
+    <div class="pf-row"><div class="pf-label">并行 I/O</div><div class="pf-note">MDM + Keychain 与模块加载并行，节省 ~115ms</div></div>
+    <div class="pf-row"><div class="pf-label">懒加载重型依赖</div><div class="pf-note">OpenTelemetry(~400KB)、gRPC(~700KB) 延迟加载</div></div>
+    <div class="pf-row"><div class="pf-label">启动性能采样</div><div class="pf-note">0.5% 外部用户采样上报，持续优化</div></div>
+  </div>
+
+  <h2>18.4 原生模块</h2>
+  <table>
+    <tr><th>模块</th><th>用途</th><th>平台</th></tr>
+    <tr><td><code>@img/sharp-*</code></td><td>图像处理（压缩截图）</td><td>多平台（8 个变体）</td></tr>
+    <tr><td><code>audio-capture.node</code></td><td>语音输入</td><td>macOS</td></tr>
+    <tr><td><code>modifiers-napi</code></td><td>键盘修饰键检测</td><td>多平台</td></tr>
+    <tr><td>Ripgrep</td><td>快速文件搜索</td><td>多平台</td></tr>
+  </table>
+</div>
+<!-- Section 18: Ch19 Observability -->
+<div class="section" id="s18">
+  <h1>第 19 章：可观测性与遥测</h1>
+  <p class="subtitle">OpenTelemetry · GrowthBook 功能标志 · 启动性能采样 · 隐私保护</p>
+
+  <h2>19.1 遥测架构</h2>
+  <div class="layer-stack">
+    <div class="layer l5" onclick="this.classList.toggle('open')">
+      <div class="layer-name">OpenTelemetry（标准化遥测）</div>
+      <div class="layer-file">Metrics · Traces · Logs</div>
+      <div class="layer-detail">计数器（sessionCounter、costCounter、tokenCounter 等）、分布式追踪、结构化日志。懒加载（~400KB），避免影响启动时间。</div>
+    </div>
+    <div class="layer l4" onclick="this.classList.toggle('open')">
+      <div class="layer-name">GrowthBook（功能标志 + A/B 测试）</div>
+      <div class="layer-file">src/services/analytics/growthbook.ts</div>
+      <div class="layer-detail">管理功能标志，支持 A/B 测试。提供 checkStatsigFeatureGate_CACHED_MAY_BE_STALE() 和 getFeatureValue_CACHED_MAY_BE_STALE() 接口。</div>
+    </div>
+    <div class="layer l3" onclick="this.classList.toggle('open')">
+      <div class="layer-name">自定义事件（logEvent）</div>
+      <div class="layer-file">src/services/analytics/index.ts</div>
+      <div class="layer-detail">类型系统强制要求：metadata 不能包含代码或文件路径（通过 AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS 类型标记）。</div>
+    </div>
+  </div>
+
+  <h2>19.2 功能标志</h2>
+  <table>
+    <tr><th>标志</th><th>用途</th></tr>
+    <tr><td><code>tengu_tool_pear</code></td><td>工具严格模式</td></tr>
+    <tr><td><code>tengu_scratch</code></td><td>暂存区功能</td></tr>
+    <tr><td><code>COORDINATOR_MODE</code></td><td>多 Agent 协调模式</td></tr>
+    <tr><td><code>HISTORY_SNIP</code></td><td>历史记录裁剪</td></tr>
+    <tr><td><code>tengu_1p_event_batch_config</code></td><td>事件批处理配置</td></tr>
+  </table>
+
+  <h2>19.3 启动性能采样</h2>
+  <div class="card">
+    <div class="card-title">采样策略与四个关键阶段</div>
+    <pre><code><span class="cm">// 100% Anthropic 内部用户，0.5% 外部用户</span>
+<span class="kw">const</span> STATSIG_SAMPLE_RATE = <span class="st">0.005</span>;
+
+logEvent(<span class="st">'tengu_startup_perf'</span>, {
+  import_time_ms: ...,    <span class="cm">// 模块加载时间</span>
+  init_time_ms: ...,      <span class="cm">// 初始化时间</span>
+  settings_time_ms: ...,  <span class="cm">// 配置加载时间</span>
+  total_time_ms: ...,     <span class="cm">// 总启动时间</span>
+});</code></pre>
+  </div>
+
+  <h2>19.4 隐私保护设计</h2>
+  <div class="permission-flow">
+    <div class="pf-row"><div class="pf-label">错误上报不包含 error.message</div><div class="pf-note">可能包含用户数据</div></div>
+    <div class="pf-row"><div class="pf-label">AnalyticsMetadata 类型约束</div><div class="pf-note">编译时防止上报代码或文件路径</div></div>
+    <div class="pf-row"><div class="pf-label">诊断日志标注 NoPII</div><div class="pf-note">logForDiagnosticsNoPII() 明确标记</div></div>
+  </div>
+
+  <h2>19.5 关键文件索引</h2>
+  <table>
+    <tr><th>文件</th><th>大小</th><th>职责</th></tr>
+    <tr><td><code>src/main.tsx</code></td><td>—</td><td>CLI 启动、参数解析、初始化</td></tr>
+    <tr><td><code>src/QueryEngine.ts</code></td><td>—</td><td>会话管理、查询生命周期</td></tr>
+    <tr><td><code>src/query.ts</code></td><td>—</td><td>Agent 循环、工具执行</td></tr>
+    <tr><td><code>src/services/api/claude.ts</code></td><td>125KB</td><td>Claude API 客户端</td></tr>
+    <tr><td><code>src/services/mcp/client.ts</code></td><td>119KB</td><td>MCP 协议客户端</td></tr>
+    <tr><td><code>src/bridge/bridgeMain.ts</code></td><td>115KB</td><td>VS Code Bridge</td></tr>
+    <tr><td><code>src/screens/REPL.tsx</code></td><td>895KB</td><td>主 REPL 界面</td></tr>
+  </table>
+</div>
+
+</div><!-- end .main -->
+
+<script>
+let cur = 0;
+const total = 19;
+
+function goto(n) {
+  document.getElementById('s' + cur).classList.remove('active');
+  document.querySelectorAll('.nav-item')[cur].classList.remove('active');
+  cur = n;
+  document.getElementById('s' + cur).classList.add('active');
+  document.querySelectorAll('.nav-item')[cur].classList.add('active');
+  document.getElementById('prog').style.width = ((cur + 1) / total * 100) + '%';
+  document.getElementById('prog-label').textContent = (cur + 1) + ' / ' + total;
+  window.scrollTo(0, 0);
+}
+
+function next() { if (cur < total - 1) goto(cur + 1); }
+function prev() { if (cur > 0) goto(cur - 1); }
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next();
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') prev();
+});
+</script>
+</body>
+</html>

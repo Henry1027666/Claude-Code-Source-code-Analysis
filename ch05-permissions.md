@@ -127,48 +127,43 @@ type PermissionBehavior = 'allow' | 'deny' | 'ask'
 
 ## 5.4 权限检查流程
 
-[src/utils/permissions/permissions.ts](../../src/utils/permissions/permissions.ts) 实现了完整的权限检查逻辑：
+[src/utils/permissions/permissions.ts](../../src/utils/permissions/permissions.ts) 实现了完整的权限检查逻辑。核心函数是 `hasPermissionsToUseTool`，它是一个多阶段决策管道：
 
 ```
 工具调用请求
     │
     ▼
-[1] 命中 Deny 规则？
-    ├─ 是 → 直接拒绝（即使在 bypassPermissions 模式下也无法绕过）
-    └─ 否 ↓
-    
-[2] 命中 Ask 规则？
-    ├─ 是 → 强制询问用户（即使在 bypassPermissions 模式下也无法绕过）
-    └─ 否 ↓
-    
-[3] 工具自检（tool.checkPermissions()）
-    ├─ 拒绝 → 返回拒绝原因
-    └─ 通过 ↓
-    
-[4] 当前是 bypassPermissions 模式？
-    ├─ 是 → 直接允许
-    └─ 否 ↓
-    
-[5] 命中 Allow 规则？
-    ├─ 是 → 直接允许
-    └─ 否 ↓
-    
-[6] 默认行为：询问用户
+[阶段 1] hasPermissionsToUseToolInner()  ← 基础权限检查
     │
-    ▼
-[7] auto 模式？
-    ├─ 是 → 先运行 AI 分类器
-    │       ├─ 分类器：安全 → 允许
-    │       ├─ 分类器：危险 → 记录拒绝次数
-    │       └─ 拒绝次数超限 → 降级为询问用户
-    └─ 否 → 显示权限对话框
+    ├─ allow → 重置 auto 模式的连续拒绝计数 → 返回 allow
+    │
+    └─ ask ↓
+    
+[阶段 2] 模式特定转换
+    │
+    ├─ dontAsk 模式 → ask 转为 deny（直接拒绝，不询问）
+    │
+    └─ auto/plan 模式 + TRANSCRIPT_CLASSIFIER 特性 ↓
+    
+[阶段 3] AI 分类器（auto 模式）
+    │
+    ├─ 跳过条件（直接 ask）：
+    │   ├─ 工具需要用户交互（AskUserQuestion 等）
+    │   ├─ acceptEdits 模式下的安全编辑
+    │   └─ 工具在安全工具白名单中
+    │
+    ├─ 运行 classifyYoloAction()
+    │   ├─ allow → 重置连续拒绝计数 → 返回 allow
+    │   └─ deny → 记录拒绝次数
+    │
+    └─ 拒绝次数超限（连续 3 次 或 总计 20 次）→ 降级为 ask
 ```
 
-### 关键代码实现
+### hasPermissionsToUseToolInner 的内部逻辑
 
 ```typescript
 // src/utils/permissions/permissions.ts（简化版）
-export async function canUseTool(
+async function hasPermissionsToUseToolInner(
   tool: Tool,
   input: unknown,
   context: ToolUseContext,
@@ -176,38 +171,57 @@ export async function canUseTool(
   toolUseID: string,
   forceDecision?: 'allow' | 'deny',
 ): Promise<PermissionResult> {
-  const permContext = context.getAppState().toolPermissionContext;
-  
-  // 1. 检查 Deny 规则（最高优先级，不可绕过）
-  const denyRule = getDenyRuleForTool(permContext, tool);
-  if (denyRule) {
-    return { behavior: 'deny', reason: { type: 'rule', rule: denyRule } };
-  }
-  
-  // 2. 检查 Ask 规则（强制询问，不可绕过）
-  const askRule = getAskRuleForTool(permContext, tool);
-  if (askRule) {
-    return { behavior: 'ask', reason: { type: 'rule', rule: askRule } };
-  }
-  
-  // 3. 工具自检
-  const toolPermResult = await tool.checkPermissions(input, context);
-  if (toolPermResult.behavior === 'deny') return toolPermResult;
-  
-  // 4. bypassPermissions 模式
-  if (permContext.mode === 'bypassPermissions') {
-    return { behavior: 'allow' };
-  }
-  
+  const permContext = context.getAppState().toolPermissionContext
+
+  // 1. Deny 规则（最高优先级，不可绕过）
+  const denyRule = getDenyRuleForTool(permContext, tool, input)
+  if (denyRule) return { behavior: 'deny', reason: { type: 'rule', rule: denyRule } }
+
+  // 2. Ask 规则（强制询问，不可绕过）
+  const askRule = getAskRuleForTool(permContext, tool, input)
+  if (askRule) return { behavior: 'ask', reason: { type: 'rule', rule: askRule } }
+
+  // 3. 工具自检（tool.checkPermissions）
+  const toolPermResult = await tool.checkPermissions(input, context)
+  if (toolPermResult.behavior === 'deny') return toolPermResult
+  if (toolPermResult.behavior === 'ask') return toolPermResult
+
+  // 4. bypassPermissions 模式 → 直接允许
+  if (permContext.mode === 'bypassPermissions') return { behavior: 'allow' }
+
   // 5. Allow 规则
-  const allowRule = toolAlwaysAllowedRule(permContext, tool);
-  if (allowRule) {
-    return { behavior: 'allow', reason: { type: 'rule', rule: allowRule } };
-  }
-  
-  // 6. 默认：询问用户
-  return { behavior: 'ask' };
+  const allowRule = toolAlwaysAllowedRule(permContext, tool, input)
+  if (allowRule) return { behavior: 'allow', reason: { type: 'rule', rule: allowRule } }
+
+  // 6. acceptEdits 模式 → 工作目录内的文件编辑自动允许
+  if (permContext.mode === 'acceptEdits' && isFileEditInWorkingDir(tool, input, permContext))
+    return { behavior: 'allow' }
+
+  // 7. 执行 permission request hooks（headless 模式）
+  const hookResult = await executePermissionRequestHooks(tool, input, context)
+  if (hookResult) return hookResult
+
+  // 8. 默认：询问用户
+  return { behavior: 'ask' }
 }
+```
+
+### 遥测记录
+
+每次 auto 模式的分类器决策都会记录详细遥测：
+
+```typescript
+logEvent('tengu_auto_mode_decision', {
+  tool_name: sanitizeToolNameForAnalytics(tool.name),
+  decision: classifierResult,
+  classifier_overhead_ms: Date.now() - classifierStartTime,
+  classifier_input_tokens: ...,
+  classifier_output_tokens: ...,
+  classifier_cost_usd: calculateCostFromTokens(...),
+  consecutive_denials: denialState.consecutiveDenials,
+  total_denials: denialState.totalDenials,
+  // ...
+})
 ```
 
 ---
@@ -218,12 +232,24 @@ export async function canUseTool(
 
 ```typescript
 // 规则格式：ToolName(pattern)
-// 例如：Bash(git *)
+// 例如：Bash(git *)、FileEdit(/home/user/*)
 
 export function matchWildcardPattern(pattern: string, value: string): boolean {
-  // 支持 * 通配符
-  // "git *" 匹配 "git status", "git diff HEAD" 等
-  // "npm publish*" 匹配 "npm publish", "npm publish --dry-run" 等
+  // 支持 * 通配符（不跨路径分隔符）
+  // "git *"       匹配 "git status"、"git diff HEAD"
+  // "npm publish*" 匹配 "npm publish"、"npm publish --dry-run"
+  // "/home/user/*" 匹配 "/home/user/foo.ts"，不匹配 "/home/user/a/b.ts"（取决于实现）
+}
+```
+
+### 规则值的解析
+
+```typescript
+// src/utils/permissions/permissionRuleParser.ts
+export function permissionRuleValueFromString(ruleString: string): PermissionRuleValue {
+  // 解析 "Bash(git *)" → { toolName: 'Bash', pattern: 'git *' }
+  // 解析 "FileEdit"    → { toolName: 'FileEdit', pattern: undefined }
+  // 解析 "mcp__s1__t1" → { toolName: 'mcp__s1__t1', pattern: undefined }
 }
 ```
 
@@ -238,16 +264,60 @@ MCP 工具有特殊的命名规则：
 // - "mcp__server1__*"     → 同上（通配符形式）
 // - "mcp__server1__write" → 只匹配 server1 的 write 工具
 
-function toolMatchesRule(tool, rule): boolean {
-  const ruleInfo = mcpInfoFromString(rule.ruleValue.toolName);
-  const toolInfo = mcpInfoFromString(tool.name);
-  
+function toolMatchesRule(tool: Tool, rule: PermissionRule): boolean {
+  const ruleInfo = mcpInfoFromString(rule.ruleValue.toolName)
+  const toolInfo = mcpInfoFromString(tool.name)
+
   return (
     ruleInfo !== null &&
     toolInfo !== null &&
     (ruleInfo.toolName === undefined || ruleInfo.toolName === '*') &&
     ruleInfo.serverName === toolInfo.serverName
-  );
+  )
+}
+```
+
+### 规则来源枚举
+
+```typescript
+// 所有合法的规则来源（按优先级排序）
+const PERMISSION_RULE_SOURCES = [
+  ...SETTING_SOURCES,  // 'policy', 'globalSettings', 'projectSettings', 'localSettings'
+  'cliArg',            // --permission-allow 命令行参数
+  'command',           // /allow 命令
+  'session',           // 本次会话临时规则
+] as const
+```
+
+### 权限请求消息的构建
+
+当需要向用户展示权限请求时，系统根据 `PermissionDecisionReason` 构建不同的消息：
+
+```typescript
+export function createPermissionRequestMessage(
+  toolName: string,
+  decisionReason?: PermissionDecisionReason,
+): string {
+  if (decisionReason?.type === 'classifier')
+    return `Classifier '${decisionReason.classifier}' requires approval for this ${toolName} command: ${decisionReason.reason}`
+
+  if (decisionReason?.type === 'hook')
+    return `Hook '${decisionReason.hookName}' blocked this action: ${decisionReason.reason}`
+
+  if (decisionReason?.type === 'rule') {
+    const ruleString = permissionRuleValueToString(decisionReason.rule.ruleValue)
+    const sourceString = permissionRuleSourceDisplayString(decisionReason.rule.source)
+    return `Permission rule '${ruleString}' from ${sourceString} requires approval for this ${toolName} command`
+  }
+
+  if (decisionReason?.type === 'subcommandResults') {
+    // 复合命令（如 "git status && rm -rf ."）中部分子命令需要审批
+    const needsApproval = [...decisionReason.reasons]
+      .filter(([, result]) => result.behavior === 'ask')
+      .map(([cmd]) => cmd)
+    return `This ${toolName} command contains multiple operations. The following parts require approval: ${needsApproval.join(', ')}`
+  }
+  // ...
 }
 ```
 
@@ -261,52 +331,82 @@ function toolMatchesRule(tool, rule): boolean {
 export const DENIAL_LIMITS = {
   maxConsecutive: 3,   // 连续拒绝 3 次 → 降级为询问用户
   maxTotal: 20,        // 总共拒绝 20 次 → 降级为询问用户
-} as const;
+} as const
 
 export type DenialTrackingState = {
-  consecutiveDenials: number;
-  totalDenials: number;
-};
+  consecutiveDenials: number
+  totalDenials: number
+}
 
 export function shouldFallbackToPrompting(state: DenialTrackingState): boolean {
   return (
     state.consecutiveDenials >= DENIAL_LIMITS.maxConsecutive ||
     state.totalDenials >= DENIAL_LIMITS.maxTotal
-  );
+  )
+}
+
+// 分类器允许时重置连续计数（但不重置总计数）
+export function recordSuccess(state: DenialTrackingState): DenialTrackingState {
+  return { ...state, consecutiveDenials: 0 }
+}
+
+// 分类器拒绝时递增两个计数
+export function recordDenial(state: DenialTrackingState): DenialTrackingState {
+  return {
+    consecutiveDenials: state.consecutiveDenials + 1,
+    totalDenials: state.totalDenials + 1,
+  }
 }
 ```
 
 **设计意图**：防止 AI 分类器过于保守，导致用户体验变差。当分类器连续拒绝 3 次或总共拒绝 20 次后，系统会降级为询问用户，让用户自己决定。
 
----
-
 ## 5.7 Bash 命令分类器
 
-对于 Bash 工具，系统有专门的 AI 分类器在后台判断命令是否危险：
+对于 Bash 工具，系统有专门的 AI 分类器（`classifyYoloAction`）在后台判断命令是否危险：
 
 ```typescript
-// src/utils/permissions/bashClassifier.ts（概念示意）
-async function classifyBashCommand(command: string): Promise<'safe' | 'dangerous'> {
-  // 检查危险模式：
-  // - rm -rf / 或 rm -rf ~
-  // - dd if=/dev/zero
-  // - git push --force
-  // - npm publish（发布包）
-  // - curl | bash（管道执行）
-  // - 命令注入（; rm -rf）
-}
+// src/utils/permissions/yoloClassifier.ts
+export async function classifyYoloAction(
+  tool: Tool,
+  input: unknown,
+  context: ToolUseContext,
+): Promise<'allow' | 'deny'>
+
+// 格式化工具调用供分类器分析
+export function formatActionForClassifier(tool: Tool, input: unknown): string
 ```
 
-分类器与用户对话框**竞速**：
+分类器与用户对话框**竞速**（`Promise.race`）：
 
 ```typescript
 const result = await Promise.race([
-  classifyBashCommand(command),
+  classifyYoloAction(tool, input, context),
   showPermissionDialog(tool, input),
-]);
+])
+// 分类器先出结果 → 自动处理
+// 用户先回答 → 按用户决定
+```
 
-// 分类器先出结果：自动处理
-// 用户先回答：按用户决定
+**分类器不可用时的处理**：
+
+```typescript
+// 通过 feature gate 控制失败策略
+const failClosed = getFeatureValue_CACHED_WITH_REFRESH(
+  'tengu_classifier_fail_closed',
+  false,
+  CLASSIFIER_FAIL_CLOSED_REFRESH_MS,  // 30 分钟刷新
+)
+
+if (classifierUnavailable) {
+  if (failClosed) {
+    // 失败关闭：分类器不可用时拒绝（更安全）
+    return { behavior: 'deny', reason: buildClassifierUnavailableMessage(...) }
+  } else {
+    // 失败开放：分类器不可用时降级为询问用户
+    return { behavior: 'ask', reason: buildClassifierUnavailableMessage(...) }
+  }
+}
 ```
 
 ---
