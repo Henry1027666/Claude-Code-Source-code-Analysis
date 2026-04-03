@@ -1,2 +1,162 @@
-# Claude-Code-Source-code-Analysis
-Results of an analysis based on the source code leaked from Claude on 31 March 2026 (version 2.1.88)
+# Claude Code 源码深度解析
+
+> 一本关于 Claude Code 架构设计与实现原理的技术书籍
+
+---
+
+## 目录
+
+### 第一部分：全局概览
+
+- [第 1 章：项目概述与架构全景](./ch01-overview.md)
+  - 1.1 Claude Code 是什么
+  - 1.2 整体架构图
+  - 1.3 技术栈选型分析
+  - 1.4 构建与分发机制
+  - 1.5 代码规模与组织
+
+### 第二部分：核心引擎
+
+- [第 2 章：启动流程与初始化](./ch02-bootstrap.md)
+
+  - 2.1 入口点 main.tsx
+  - 2.2 CLI 参数解析
+  - 2.3 Bootstrap 状态初始化
+  - 2.4 并行初始化优化
+  - 2.5 启动性能分析
+- [第 3 章：查询引擎与 Agent 循环](./ch03-query-engine.md)
+
+  - 3.1 QueryEngine 核心设计
+  - 3.2 Agent 循环机制
+  - 3.3 Token 预算管理
+  - 3.4 工具调用编排
+  - 3.5 错误恢复与重试
+- [第 4 章：工具系统](./ch04-tools.md)
+
+  - 4.1 工具框架设计
+  - 4.2 文件操作工具（Read/Write/Edit/Glob/Grep）
+  - 4.3 执行工具（Bash/PowerShell/REPL）
+  - 4.4 Web 工具（WebFetch/WebSearch）
+  - 4.5 AI 工具（Agent/Skill）
+  - 4.6 任务与规划工具
+  - 4.7 工具权限与安全
+
+### 第三部分：权限与安全
+
+- [第 5 章：权限系统](./ch05-permissions.md)
+
+  - 5.1 三层权限模型
+  - 5.2 权限决策流程
+  - 5.3 用户审批机制
+  - 5.4 权限持久化
+  - 5.5 企业策略（MDM）
+- [第 6 章：认证与凭证管理](./ch06-auth.md)
+
+  - 6.1 OAuth 2.0 + PKCE 流程
+  - 6.2 macOS Keychain 集成
+  - 6.3 API Key 管理
+  - 6.4 多云平台认证（Bedrock/Vertex）
+
+### 第四部分：终端 UI 系统
+
+- [第 7 章：终端渲染引擎（Ink）](./ch07-ink-renderer.md)
+
+  - 7.1 React → 终端的渲染管道
+  - 7.2 Yoga 布局引擎集成
+  - 7.3 ANSI 颜色与样式
+  - 7.4 键盘输入处理
+  - 7.5 焦点管理
+- [第 8 章：UI 组件系统](./ch08-components.md)
+
+  - 8.1 原子设计系统
+  - 8.2 核心组件（App/REPL/Message）
+  - 8.3 PromptInput 输入系统
+  - 8.4 Vim 模式实现
+  - 8.5 主题与样式定制
+
+### 第五部分：外部集成
+
+- [第 9 章：MCP（Model Context Protocol）集成](./ch09-mcp.md)
+
+  - 9.1 MCP 协议概述
+  - 9.2 MCP 客户端实现
+  - 9.3 服务器发现与认证
+  - 9.4 资源管理
+  - 9.5 权限桥接
+- [第 10 章：VS Code Bridge](./ch10-bridge.md)
+
+  - 10.1 Bridge 架构设计
+  - 10.2 WebSocket 通信协议
+  - 10.3 会话同步机制
+  - 10.4 IDE 上下文传递
+- [第 11 章：Claude API 集成](./ch11-api.md)
+
+  - 11.1 API 客户端设计
+  - 11.2 流式响应处理
+  - 11.3 重试与错误处理
+  - 11.4 多云平台支持
+  - 11.5 成本追踪
+
+### 第六部分：高级特性
+
+- [第 12 章：多 Agent 协调](./ch12-multi-agent.md)
+
+  - 12.1 Coordinator 模式
+  - 12.2 Agent 任务分发
+  - 12.3 结果聚合
+  - 12.4 团队协作
+- [第 13 章：内存系统](./ch13-memory.md)
+
+  - 13.1 持久化内存设计
+  - 13.2 MEMORY.md 文件格式
+  - 13.3 跨会话上下文
+  - 13.4 内存提取与摘要
+- [第 14 章：会话管理](./ch14-sessions.md)
+
+  - 14.1 会话生命周期
+  - 14.2 会话持久化
+  - 14.3 远程会话
+  - 14.4 Worktree 隔离
+- [第 15 章：插件与技能系统](./ch15-plugins.md)
+
+  - 15.1 插件架构
+  - 15.2 Skill 系统
+  - 15.3 Hooks 机制
+  - 15.4 自定义命令
+
+### 第七部分：工程实践
+
+- [第 16 章：状态管理](./ch16-state.md)
+
+  - 16.1 全局状态设计
+  - 16.2 AppState 实现
+  - 16.3 React Hooks 体系
+  - 16.4 状态持久化
+- [第 17 章：构建系统与性能优化](./ch17-build.md)
+
+  - 17.1 Bun 构建流程
+  - 17.2 单文件打包策略
+  - 17.3 Tree Shaking 分析
+  - 17.4 启动性能优化
+  - 17.5 原生模块集成
+- [第 18 章：可观测性与遥测](./ch18-observability.md)
+
+  - 18.1 OpenTelemetry 集成
+  - 18.2 使用分析
+  - 18.3 错误追踪
+  - 18.4 Feature Flags（GrowthBook）
+
+---
+
+## 关于本书
+
+本书基于 Claude Code 开源源码进行深度分析，旨在帮助读者理解一个生产级 AI 编程助手的完整实现。
+
+**适合读者：**
+
+- 希望深入理解 AI 工具链实现的工程师
+- 对终端 UI 框架感兴趣的开发者
+- 研究 Agent 系统架构的技术人员
+- 想要构建类似工具的开发者
+
+**源码版本：** claude-code-source-main（2026.3.31版本号 `2.1.88`）
